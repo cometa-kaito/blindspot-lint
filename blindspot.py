@@ -152,10 +152,22 @@ class Checker(ast.NodeVisitor):
             # BS005 グローバル可変への無制限蓄積
             # モジュール読み込み時に一度だけ構築される表（登録関数など）は対象外。
             # 判定: その関数がモジュール直下で即座に呼ばれていれば初期化とみなす。
+            #
+            # 【`_` 始まりを除外しない理由 ― 2026-10-01 の実測で方針を変えた】
+            # 以前は `_` 始まりの名前を「非公開のレジストリだから意図的」として
+            # 除外していた。しかし LLM に「記録を貯める関数」を書かせると
+            # **5回中4回が `_recorded_paths = []` と書く**。
+            # つまり除外していたのは、この検査器がいちばん見るべき形だった。
+            #
+            # 除外を外すと標準ライブラリ155ファイルで4件増える
+            # （threading._threading_atexits / turtle._CFG / typing._cleanups。
+            # いずれも意図的なレジストリ）。
+            # 1ファイルあたり 0.052 → 0.077 件。
+            # この検査器の用途は LLM の生成コードを見ることなので、
+            # 助言4件と引き換えに主要な形を拾うほうを選んだ。
             if attr in {"append", "extend", "update", "add"} \
                and name in self.global_mutables and name not in self.shrinking \
                and name not in self.local_names \
-               and not name.startswith("_") \
                and self.params and self.cur_func not in self.module_called:
                 self.findings.append(Finding(
                     "BS005", node.lineno, node.col_offset,

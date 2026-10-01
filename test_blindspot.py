@@ -47,7 +47,9 @@ CASES = [
  # ---------- BS005 モジュール変数への蓄積 ----------
  ("無制限に貯める", "CACHE = {}\ndef f(x):\n    CACHE.update(x)", {"BS005"}),
  ("上限を設けている", "CACHE = {}\ndef f(k, v):\n    CACHE[k] = v\n    while len(CACHE) > 100:\n        CACHE.popitem()", set()),
- ("_ 始まりは対象外", "_REG = []\ndef f(x):\n    _REG.append(x)", set()),
+ ("_ 始まりも検出する", "_REG = []\ndef f(x):\n    _REG.append(x)", {"BS005"}),
+ ("LLMが実際に書く形", "_recorded_paths = []\ndef record(path):\n    global _recorded_paths\n    _recorded_paths.append(path)\n    return len(_recorded_paths)", {"BS005"}),
+ ("_ 始まりでも上限があれば対象外", "_REG = []\ndef f(x):\n    _REG.append(x)\n    while len(_REG) > 100:\n        _REG.pop(0)", set()),
  ("ローカル変数は対象外", "out = []\ndef f(items):\n    out = []\n    for i in items:\n        out.append(i)\n    return out", set()),
  ("初期化関数は対象外", "T = []\ndef reg(x):\n    T.append(x)\nreg(1)", set()),
 ]
