@@ -203,10 +203,16 @@ class Checker(ast.NodeVisitor):
 
     def visit_Compare(self, node):
         # 連鎖比較 `a is b is None` は最終的に None 判定なので正しい用法。
-        # 比較に関わるどこかに None / True / False があれば is の誤用ではない。
+        # 比較に関わるどこかに None / True / False、あるいは番兵らしい名前が
+        # あれば is の誤用ではない（`value is tb is _sentinel` の形）。
         chain = [node.left] + list(node.comparators)
-        if any(isinstance(x, ast.Constant) and (x.value is None or isinstance(x.value, bool))
-               for x in chain) and len(node.ops) > 1:
+        def _chain_ok(x):
+            if isinstance(x, ast.Constant):
+                return x.value is None or isinstance(x.value, bool)
+            nm = x.id if isinstance(x, ast.Name) else (
+                 x.attr if isinstance(x, ast.Attribute) else "")
+            return bool(nm) and (nm.startswith("_") or nm.isupper())
+        if len(node.ops) > 1 and any(_chain_ok(x) for x in chain):
             self.generic_visit(node); return
         for op, right in zip(node.ops, node.comparators):
             # BS002 浮動小数点の等価比較

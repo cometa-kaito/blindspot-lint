@@ -36,6 +36,7 @@ CASES = [
  ("番兵との is は正しい", "_KEEP = object()\ndef f(name):\n    if name is not _KEEP:\n        return name", set()),
  ("全大文字の番兵も対象外", "SENTINEL = object()\ndef f(x):\n    return x is SENTINEL", set()),
  ("連鎖比較で None", "def f(a, b, c):\n    return a is b is c is None", set()),
+ ("連鎖比較＋番兵", "_S = object()\ndef f(value=_S, tb=_S):\n    if value is tb is _S:\n        return None\n    return value", set()),
  ("is と == の併用は定石", "def f(v, value):\n    return v is value or v == value", set()),
 
  # ---------- BS004 ReDoS ----------
