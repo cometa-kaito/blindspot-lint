@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blindspot-lint"
+version = "0.1.0"
+description = "ローカルLLMが見落とす欠陥を補う Python 向け静的検査器"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+keywords = ["lint", "static-analysis", "llm", "code-review", "education"]
+dependencies = []          # 標準ライブラリのみ。依存を増やさない方針
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Quality Assurance",
+  "Intended Audience :: Education",
+  "Intended Audience :: Developers",
+]
+
+[project.scripts]
+blindspot = "blindspot:cli"
+
+[tool.hatch.build.targets.wheel]
+# 単一ファイルで配る。コピーしてきて python3 blindspot.py でも動く状態を保つ
+only-include = ["blindspot.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["blindspot.py", "test_blindspot.py", "README.md", "LICENSE"]
