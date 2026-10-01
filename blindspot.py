@@ -35,8 +35,28 @@ class Finding:
                 "message": self.msg, "hint": self.hint}
 
 
+# 誤差のない数値型。これらで組んだ式は除算があっても float ではない。
+EXACT_NUMERIC = {"Decimal", "Fraction"}
+
+
 def _is_floaty(node):
-    """float リテラルか、float を生みうる演算（除算・float() 呼び出し）を含むか"""
+    """float リテラルか、float を生みうる演算（除算・float() 呼び出し）を含むか
+
+    Decimal / Fraction で組んだ式は除外する。
+    【なぜ ― 2026-10-02 の実測で見つけた自己矛盾】
+    BS002 のヒントは「整数や Decimal で扱ってください」と勧めている。
+    ところが Decimal(a) / Decimal(b) == Decimal(c) には除算が含まれるため、
+    **検査器が自分の勧めた修正を指摘し続けていた。**
+    qwen2.5-coder:3b はこれで3往復しても収束せず、
+    4件中2件は元のコード（float の ==）に逆戻りした。
+    """
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+           and n.func.id in EXACT_NUMERIC:
+            return False
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+           and n.func.attr in EXACT_NUMERIC:
+            return False          # decimal.Decimal(...) の形
     for n in ast.walk(node):
         if isinstance(n, ast.Constant) and isinstance(n.value, float):
             return True
@@ -241,7 +261,9 @@ class Checker(ast.NodeVisitor):
                     "BS002", node.lineno, node.col_offset,
                     "浮動小数点の値を == / != で比較しています",
                     "丸め誤差のため一致しないことがあります（0.1 を3回足しても 0.3 になりません）。"
-                    "math.isclose() を使うか、整数や Decimal で扱ってください"))
+                    "math.isclose() を使うか、整数や Decimal で扱ってください。"
+                    "math.isclose を使うなら `import math` を、"
+                    "Decimal を使うなら `from decimal import Decimal` を忘れないでください"))
             # BS003 値の比較に is を使っている
             # None / True / False との is は正しい用法なので除外する。
             # それ以外（リテラル・変数同士）は同一性と等価性の混同にあたる。

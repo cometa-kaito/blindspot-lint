@@ -25,6 +25,9 @@ CASES = [
  ("計算結果どうしの比較", "def f(rows):\n    t = 0.0\n    for _ in rows:\n        t = t + 0.1\n    return t == len(rows) * 0.1", {"BS002"}),
  ("定数との比較は対象外", "def f(s):\n    return s == 0.0", set()),
  ("isclose は正しい", "import math\ndef f(a, b):\n    return math.isclose(a, b)", set()),
+ ("Decimal での比較は正しい", "from decimal import Decimal\ndef f(xs, t):\n    return Decimal(sum(xs)) / Decimal(len(xs)) == Decimal(t)", set()),
+ ("decimal.Decimal の形も対象外", "import decimal\ndef f(a, b):\n    return decimal.Decimal(a) / decimal.Decimal(b) == decimal.Decimal(1)", set()),
+ ("Fraction も対象外", "from fractions import Fraction\ndef f(a, b):\n    return Fraction(a) / Fraction(b) == Fraction(1, 2)", set()),
 
  # ---------- BS003 値の is 比較 ----------
  ("要素アクセスどうしの is", "def f(xs, target):\n    for i in range(len(xs)):\n        if xs[i] is target:\n            return i\n    return -1", {"BS003"}),
