@@ -85,6 +85,8 @@ class Checker(ast.NodeVisitor):
         self.local_names = set()  # いまの関数のローカル変数名（同名のグローバルと区別）
         self._bool_stack = []     # いま走査中の and / or 式
         self.module_called = set()  # モジュール直下で呼ばれている関数名（＝初期化処理）
+        self.module_funcs = set()   # モジュール直下で定義された関数名
+        self.attr_shrinking = set() # 縮む操作がある "関数名.属性名" 
 
     # ---------- 収集 ----------
     def collect_module_state(self, tree):
@@ -104,12 +106,21 @@ class Checker(ast.NodeVisitor):
                 for sub in ast.walk(n):
                     if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
                         self.module_called.add(sub.func.id)
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.module_funcs.add(n.name)
         for n in ast.walk(tree):
             # 縮む操作があるなら「無制限に蓄積」ではない
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                and n.func.attr in {"clear", "pop", "popitem", "remove", "discard"} \
                and isinstance(n.func.value, ast.Name):
                 self.shrinking.add(n.func.value.id)
+            # 関数属性に対する縮む操作（record.paths.pop() など）
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+               and n.func.attr in {"clear", "pop", "popitem", "remove", "discard"} \
+               and isinstance(n.func.value, ast.Attribute) \
+               and isinstance(n.func.value.value, ast.Name):
+                self.attr_shrinking.add(f"{n.func.value.value.id}.{n.func.value.attr}")
             if isinstance(n, ast.Delete):
                 for t in n.targets:
                     base = t.value if isinstance(t, ast.Subscript) else t
@@ -194,6 +205,34 @@ class Checker(ast.NodeVisitor):
                     f"モジュール変数 `{name}` に追加し続けており、取り除く処理がありません",
                     f"`{name}` は {self.global_mutables[name]} 行目で定義されています。"
                     "長時間動かすとメモリが増え続けます。上限を設けるか明示的に解放してください"))
+        # BS005 の第2の形：関数属性に貯める（record.paths.append(...)）
+        #
+        # 【なぜ必要か ― 2026-10-02 の実測】
+        # 「記録を貯める関数」を5モデルに書かせたら、設計が5通りに分かれた。
+        #   1.5b        モジュール変数 recorded_paths = []      ← 従来の BS005 で拾える
+        #   14b         関数属性 record.recorded_paths = []     ← これ。拾えていなかった
+        #   3b/非特化    クラス self.records                     ← 拾わない（下記）
+        #   7b          ファイルに追記                           ← 別の欠陥クラス
+        # 無制限の蓄積は5モデル中4モデルに存在したのに、拾えたのは1つだけだった。
+        #
+        # 関数属性はモジュール変数と同じ寿命（関数は解放されない）なので、
+        # 同じ欠陥である。標準ライブラリ155ファイルでの出現は **0件** なので
+        # 偽陽性の危険がない。
+        #
+        # 一方 self.attr.append() は拾わない。標準ライブラリに103件あり、
+        # コレクションを持つクラスの普通の書き方である。
+        # インスタンスの寿命が蓄積を区切るので、同じ欠陥とは言えない。
+        if isinstance(f, ast.Attribute) and f.attr in {"append", "extend", "update", "add"} \
+           and isinstance(f.value, ast.Attribute) and isinstance(f.value.value, ast.Name):
+            holder, attr = f.value.value.id, f.value.attr
+            if holder in self.module_funcs \
+               and f"{holder}.{attr}" not in self.attr_shrinking:
+                self.findings.append(Finding(
+                    "BS005", node.lineno, node.col_offset,
+                    f"関数属性 `{holder}.{attr}` に追加し続けており、取り除く処理がありません",
+                    f"関数 `{holder}` は解放されないので、`{holder}.{attr}` は"
+                    "モジュール変数と同じように増え続けます。"
+                    "上限を設けるか明示的に解放してください"))
         # BS004 ReDoS
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "re":
             if node.args and isinstance(node.args[0], ast.Constant) \
