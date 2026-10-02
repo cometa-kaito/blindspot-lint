@@ -1,0 +1,55 @@
+name: publish
+
+# PyPI への公開。タグを打つと走る。
+#
+# API トークンは使わない（Trusted Publishing）。
+# PyPI 側で一度だけ次を登録しておく必要がある。
+#   https://pypi.org/manage/account/publishing/
+#     PyPI Project Name : blindspot-lint
+#     Owner             : cometa-kaito
+#     Repository name   : blindspot-lint
+#     Workflow name     : publish.yml
+#     Environment name  : pypi
+#
+# 登録後、公開するには
+#   git tag v0.1.0 && git push origin v0.1.0
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: テストを通す（通らなければ公開しない）
+        run: python3 test_blindspot.py
+
+      - name: 配布物を作る
+        run: |
+          python3 -m pip install --quiet build twine
+          python3 -m build
+          python3 -m twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # Trusted Publishing に必要
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
