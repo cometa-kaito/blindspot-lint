@@ -99,14 +99,49 @@ def _bounded_container(node):
 
 def _mutable_container(node):
     """追加していける可変コンテナか"""
-    if isinstance(node, (ast.List, ast.Dict, ast.Set)):
-        return True
+    return _container_kind(node) is not None
+
+
+def _container_kind(node):
+    """コンテナの種類を返す（"list" / "dict" / "set"）。違えば None
+
+    【なぜ種類が必要か ― 2026-10-02】
+    直し方の助言が型に依存する。辞書に対して
+    `CACHE = deque(maxlen=1000)` と勧めるのは**誤り**で、
+    `CACHE.update(...)` が動かなくなる。
+    ヒントは実測でモデルの行動を強く左右する（解消率 22% → 100%）ので、
+    誤った助言はコードを壊す側に働く。
+    """
+    if isinstance(node, ast.List):
+        return "list"
+    if isinstance(node, ast.Dict):
+        return "dict"
+    if isinstance(node, ast.Set):
+        return "set"
     if isinstance(node, ast.Call):
         name = (node.func.id if isinstance(node.func, ast.Name)
                 else node.func.attr if isinstance(node.func, ast.Attribute) else "")
-        return name in {"list", "dict", "set", "deque", "defaultdict", "Counter",
-                        "OrderedDict"}
-    return False
+        return {"list": "list", "deque": "list",
+                "dict": "dict", "defaultdict": "dict", "OrderedDict": "dict",
+                "Counter": "dict", "set": "set"}.get(name)
+    return None
+
+
+def _bound_advice(name, kind):
+    """種類に応じた直し方を返す"""
+    if kind == "list":
+        return (f"`from collections import deque` して "
+                f"`{name} = deque(maxlen=1000)` に置き換えるのが手軽です")
+    if kind == "dict":
+        return (f"上限を決めて古いものを捨ててください。"
+                f"`if len({name}) > 1000: {name}.pop(next(iter({name})))` を"
+                f"追加するか、関数の結果を覚えるだけなら "
+                f"`@functools.lru_cache(maxsize=1000)` に置き換えてください")
+    if kind == "set":
+        return (f"上限を決めて古いものを捨ててください。"
+                f"`if len({name}) > 1000: {name}.pop()` を追加するか、"
+                f"本当に全件保持が必要かを見直してください")
+    return "上限を設けるか、明示的に解放してください"
 
 
 def _is_floaty(node, floaty_names=()):
@@ -168,6 +203,7 @@ class Checker(ast.NodeVisitor):
         self.findings = []
         self.params = []          # 関数ごとの引数名（スタック）
         self.global_mutables = {} # モジュールレベルの可変オブジェクト名 -> 行
+        self.global_kind = {}     # 同じ名前 -> "list" / "dict" / "set"
         self.shrinking = set()    # どこかで削除・初期化されている名前
         self.cur_func = None      # いま走査中の関数名
         self.local_names = set()  # いまの関数のローカル変数名（同名のグローバルと区別）
@@ -175,6 +211,7 @@ class Checker(ast.NodeVisitor):
         self.module_called = set()  # モジュール直下で呼ばれている関数名（＝初期化処理）
         self.module_funcs = set()   # モジュール直下で定義された関数名
         self.attr_shrinking = set() # 縮む操作がある "関数名.属性名"
+        self.attr_kind = {}        # "関数名.属性名" -> "list" / "dict" / "set"
         self.floaty_names = set()   # float を生む式を代入された局所変数
         self.alias = {}             # 局所変数 -> 指している元の名前（同じオブジェクト）
         self.module_strs = {}       # モジュール直下の文字列定数 名前 -> 値
@@ -187,6 +224,7 @@ class Checker(ast.NodeVisitor):
                 # deque(maxlen=N) のように上限が決まっているものは対象外
                 if _mutable_container(v) and not _bounded_container(v):
                     self.global_mutables[n.targets[0].id] = n.lineno
+                    self.global_kind[n.targets[0].id] = _container_kind(v)
                 # 正規表現を定数に置いてから使う形を追うため（BS004）
                 if isinstance(v, ast.Constant) and isinstance(v.value, str):
                     self.module_strs[n.targets[0].id] = v.value
@@ -220,6 +258,11 @@ class Checker(ast.NodeVisitor):
                 for t in n.targets:
                     if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name):
                         self.attr_shrinking.add(f"{t.value.id}.{t.attr}")
+            # 関数属性の種類を覚える（直し方の助言に使う）
+            if isinstance(n, ast.Assign) and _container_kind(n.value):
+                for t in n.targets:
+                    if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name):
+                        self.attr_kind[f"{t.value.id}.{t.attr}"] = _container_kind(n.value)
             if isinstance(n, ast.Delete):
                 for t in n.targets:
                     base = t.value if isinstance(t, ast.Subscript) else t
@@ -361,8 +404,7 @@ class Checker(ast.NodeVisitor):
                     "取り除く処理がありません",
                     f"`{root}` は {self.global_mutables[root]} 行目で定義されています。"
                     "長時間動かすとメモリが増え続けます。"
-                    f"`from collections import deque` して "
-                    f"`{root} = deque(maxlen=1000)` に置き換えるのが手軽です"))
+                    + _bound_advice(root, self.global_kind.get(root))))
         # BS005 の第2の形：関数属性に貯める（record.paths.append(...)）
         #
         # 【なぜ必要か ― 2026-10-02 の実測】
@@ -390,8 +432,8 @@ class Checker(ast.NodeVisitor):
                     f"関数属性 `{holder}.{attr}` に追加し続けており、取り除く処理がありません",
                     f"関数 `{holder}` は解放されないので、`{holder}.{attr}` は"
                     "モジュール変数と同じように増え続けます。"
-                    f"`from collections import deque` して "
-                    f"`{holder}.{attr} = deque(maxlen=1000)` に置き換えるのが手軽です"))
+                    + _bound_advice(f"{holder}.{attr}",
+                                    self.attr_kind.get(f"{holder}.{attr}"))))
         # BS004 ReDoS
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "re":
             # 文字列を直接渡す形と、モジュール定数に置いてから渡す形の両方を見る
@@ -537,27 +579,115 @@ def check_source(src, filename="<string>"):
     return sorted(c.findings, key=lambda f: (f.line, f.rule))
 
 
+def _width():
+    """端末の幅。パイプやリダイレクト先なら 80 とみなす"""
+    try:
+        import shutil
+        w = shutil.get_terminal_size(fallback=(80, 24)).columns
+    except Exception:
+        w = 80
+    return max(40, min(w, 120))
+
+
+# 行頭に来てはいけない文字（行頭禁則）
+NO_LINE_START = "、。，．）」』】〉｝”’!?,.:;）"
+
+def _wrap(text, width, indent):
+    """全角を2文字分として数えて折り返す
+
+    textwrap は全角を1文字と数えるので日本語の説明がはみ出す。
+    ヒントは実測で 160〜350 文字になり、端末では壁になっていた。
+    説明そのものは短くしない（詳しいほどモデルの修正率が上がる）。
+    人間向けの表示だけ折り返す。--json の内容は変えない。
+
+    次の2つを守る。
+      1. `...` で囲んだコードと英数字の語を途中で切らない
+         （`CACHE.pop(nex` / `t(iter(CACHE)))` のように切れると
+         コピーして貼れない）
+      2. 行頭に 、。） を置かない
+    """
+    import unicodedata
+    def cw(ch):
+        return 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+
+    # 切ってはいけない塊に分ける
+    atoms, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "`":                                  # `...` は丸ごと1塊
+            j = text.find("`", i + 1)
+            if j == -1:
+                atoms.append(ch); i += 1
+            else:
+                atoms.append(text[i:j + 1]); i = j + 1
+        elif ch.isascii() and (ch.isalnum() or ch in "_.()[]{}=<>+-*/%@:"):
+            j = i                                      # 英数字と記号の連なりも1塊
+            while j < n and text[j].isascii() and (
+                    text[j].isalnum() or text[j] in "_.()[]{}=<>+-*/%@:"):
+                j += 1
+            atoms.append(text[i:j]); i = j
+        else:
+            atoms.append(ch); i += 1
+
+    limit = max(24, width - len(indent))
+    lines, cur, w = [], "", 0
+    for a in atoms:
+        aw = sum(cw(c) for c in a)
+        if w and w + aw > limit:
+            # 行頭禁則：次が閉じ記号ならはみ出してでも前の行に置く
+            if a and a[0] in NO_LINE_START:
+                cur += a; w += aw; continue
+            lines.append(cur); cur, w = "", 0
+        if a == " " and not cur:
+            continue                                   # 行頭の空白は捨てる
+        cur += a; w += aw
+    if cur:
+        lines.append(cur)
+    return [indent + l.rstrip() for l in lines]
+
+
 def main(argv):
     as_json = "--json" in argv
+    quiet = "--quiet" in argv or "-q" in argv
     files = [a for a in argv[1:] if not a.startswith("-")]
     if not files:
         print(__doc__); return 2
-    total, out = 0, []
+    width = _width()
+    total, out, bad_files, errors = 0, [], 0, 0
     for path in files:
-        src = open(path, encoding="utf-8").read()
+        try:
+            src = open(path, encoding="utf-8").read()
+        except OSError as e:
+            print(f"{path}: 読めません（{e.strerror}）"); errors += 1; continue
         try:
             fs = check_source(src, path)
         except SyntaxError as e:
-            print(f"{path}: 構文エラー {e}"); continue
+            print(f"{path}: 構文エラー {e}"); errors += 1; continue
         total += len(fs)
+        if fs:
+            bad_files += 1
         if as_json:
             out += [dict(file=path, **f.as_dict()) for f in fs]
         else:
             for f in fs:
                 print(f"{path}:{f.line}:{f.col}: {f.rule} {f.msg}")
-                print(f"    → {f.hint}")
+                wrapped = _wrap(f.hint, width, "      ")
+                if wrapped:
+                    print("    → " + wrapped[0].lstrip())
+                    for line in wrapped[1:]:
+                        print(line)
     if as_json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
+    elif not quiet:
+        # 無言で終わると「動いたのか」が分からない。必ず結果を1行出す。
+        n = len(files)
+        if total:
+            print()
+            print(f"{n} ファイル中 {bad_files} ファイルに {total} 件の指摘があります。")
+            print("ruff / pylint と併用してください。"
+                  "LLM に直させるなら `--json` の出力をそのまま渡せます。")
+        elif errors == 0:
+            print(f"{n} ファイルを検査しました。この検査器が見る5項目に問題はありません。")
     return 1 if total else 0
 
 

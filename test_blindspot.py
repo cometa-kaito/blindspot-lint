@@ -76,6 +76,14 @@ CASES = [
  ("関数属性でも上限があれば対象外", "def record(p):\n    if not hasattr(record, 'xs'):\n        record.xs = []\n    record.xs.append(p)\n    while len(record.xs) > 10:\n        record.xs.pop(0)", set()),
  ("self への append は対象外", "class C:\n    def __init__(self):\n        self.xs = []\n    def add(self, v):\n        self.xs.append(v)", set()),
  ("deque(maxlen) は対象外", "from collections import deque\nxs = deque(maxlen=1000)\ndef f(p):\n    xs.append(p)\n    return len(xs)", set()),
+
+ # ---------- ヒントが勧めた直し方が、実際に指摘を消すか ----------
+ # 勧めた直し方で指摘が残ると、モデルが収束せず元のコードに逆戻りする。
+ # 実測で BS002 の Decimal にこれが起きたので、全部固定しておく。
+ ("辞書の上限処理", "CACHE = {}\ndef f(k, v):\n    CACHE.update({k: v})\n    if len(CACHE) > 1000:\n        CACHE.pop(next(iter(CACHE)))\n    return len(CACHE)", set()),
+ ("lru_cache に置き換え", "import functools\n\n@functools.lru_cache(maxsize=1000)\ndef f(k):\n    return k * 2", set()),
+ ("集合の上限処理", "SEEN = set()\ndef f(p):\n    SEEN.add(p)\n    if len(SEEN) > 1000:\n        SEEN.pop()\n    return len(SEEN)", set()),
+ ("関数属性の辞書の上限処理", "def f(k, v):\n    if not hasattr(f, 'c'):\n        f.c = {}\n    f.c.update({k: v})\n    if len(f.c) > 1000:\n        f.c.pop(next(iter(f.c)))\n    return len(f.c)", set()),
  ("関数属性の deque(maxlen) も対象外", "from collections import deque\ndef f(p):\n    if not hasattr(f, 'xs'):\n        f.xs = deque(maxlen=1000)\n    f.xs.append(p)", set()),
  ("上限なしの deque は検出する", "from collections import deque\nxs = deque()\ndef f(p):\n    xs.append(p)", {"BS005"}),
  ("maxlen=None は上限なし", "from collections import deque\nxs = deque(maxlen=None)\ndef f(p):\n    xs.append(p)", {"BS005"}),
