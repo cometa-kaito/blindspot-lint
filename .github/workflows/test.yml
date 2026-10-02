@@ -19,8 +19,13 @@ jobs:
       - name: 自己テスト
         run: python3 test_blindspot.py
 
+      - name: 差し戻しループの自己テスト（ollama は使わない）
+        run: python3 test_blindspot_loop.py
+
       - name: 自分自身を検査する（警告ゼロであること）
-        run: python3 blindspot.py blindspot.py test_blindspot.py
+        run: |
+          python3 blindspot.py blindspot.py blindspot_loop.py \
+                  test_blindspot.py test_blindspot_loop.py
 
       - name: 標準ライブラリでの偽陽性を数える
         run: |
@@ -37,4 +42,13 @@ jobs:
         run: |
           python3 -m pip install --quiet .
           blindspot --json blindspot.py > /dev/null
+          blindspot-loop --help > /dev/null
+          # リポジトリ直下だと手元の blindspot_loop.py を読んでしまうので外へ出る
+          cd /tmp && python3 -c "
+import blindspot_loop, pathlib
+d = pathlib.Path(blindspot_loop.__file__).resolve().parent
+assert d.name == 'site-packages', f'入れたものではなく {d} を読んでいる'
+assert (d / 'blindspot_assets' / 'loop.html').exists(), '画面の HTML が同梱されていない'
+print('画面の HTML も入っている')
+"
           echo "コマンドとして動作"

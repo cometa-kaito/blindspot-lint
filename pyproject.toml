@@ -34,10 +34,17 @@ Issues = "https://github.com/cometa-kaito/blindspot-lint/issues"
 
 [project.scripts]
 blindspot = "blindspot:cli"
+blindspot-loop = "blindspot_loop:cli"
 
 [tool.hatch.build.targets.wheel]
-# 単一ファイルで配る。コピーしてきて python3 blindspot.py でも動く状態を保つ
-only-include = ["blindspot.py"]
+# 検査器は単一ファイルのまま。コピーしてきて python3 blindspot.py でも動く状態を保つ。
+# 差し戻しループはその上に乗る別ファイルで、画面の HTML を1枚だけ連れていく。
+only-include = ["blindspot.py", "blindspot_loop.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# site-packages に web/ という一般名の階層を作らないため、名前を変えて入れる
+"web/loop.html" = "blindspot_assets/loop.html"
 
 [tool.hatch.build.targets.sdist]
-include = ["blindspot.py", "test_blindspot.py", "README.md", "LICENSE"]
+include = ["blindspot.py", "blindspot_loop.py", "test_blindspot.py",
+           "test_blindspot_loop.py", "web/", "README.md", "LICENSE"]

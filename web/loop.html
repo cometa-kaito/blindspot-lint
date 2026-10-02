@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>blindspot-loop</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* 上に「やりたいこと」、下にラウンドが縦に積まれる。藍のインクと紙。 */
+:root{
+  --paper:#f2f5f6; --card:#ffffff; --ink:#15222b; --muted:#5a6b74; --rule:#d2dade;
+  --ai:#1d5a76; --ai-weak:#e4eef3; --flag:#a33c1c; --flag-weak:#f7e9e3;
+  --ok:#1d6b50; --ok-weak:#e3f1ea; --muted-2:#79898f;
+  --font-disp:"Zen Old Mincho",serif;
+  --font-body:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0e151a; --card:#17212a; --ink:#dde7eb; --muted:#93a6ae; --rule:#2a3a45;
+  --ai:#74b6d2; --ai-weak:#15303d; --flag:#e4906b; --flag-weak:#33211a;
+  --ok:#6cc39d; --ok-weak:#14291f; --muted-2:#7d8f98; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#0e151a; --card:#17212a; --ink:#dde7eb; --muted:#93a6ae; --rule:#2a3a45;
+  --ai:#74b6d2; --ai-weak:#15303d; --flag:#e4906b; --flag-weak:#33211a;
+  --ok:#6cc39d; --ok-weak:#14291f; --muted-2:#7d8f98; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-body);
+  font-size:14px;line-height:1.75}
+.page{max-width:900px;margin:0 auto;padding-inline:16px;padding-block:26px 56px}
+
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;margin-bottom:6px}
+h1{font-family:var(--font-mono);font-size:clamp(20px,3.6vw,26px);font-weight:700;
+  margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:13px;margin:0 0 20px;max-width:60ch}
+
+/* 入力 */
+.ask{background:var(--card);border:1px solid var(--rule);border-radius:4px;
+  padding:14px;display:flex;flex-direction:column;gap:11px}
+label.lab{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted-2);display:block;margin-bottom:5px}
+#task{width:100%;min-height:92px;resize:vertical;font:400 14px/1.7 var(--font-body);
+  color:var(--ink);background:transparent;border:1px solid var(--rule);border-radius:3px;
+  padding:9px 11px}
+#task:focus{outline:2px solid var(--ai);outline-offset:-2px;border-color:transparent}
+.opts{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end}
+.opts > div{min-width:0}
+select,input[type=number]{font:500 13px/1.6 var(--font-body);color:var(--ink);
+  background:var(--card);border:1px solid var(--rule);border-radius:3px;padding:5px 8px}
+input[type=number]{width:4.5em}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);
+  padding-bottom:5px}
+.grow{flex:1 1 auto}
+.btn{font:700 14px/1.5 var(--font-body);background:var(--ai);color:var(--paper);border:0;
+  border-radius:3px;padding:9px 20px;cursor:pointer}
+.btn:hover{filter:brightness(1.12)}
+.btn[disabled]{opacity:.45;cursor:default;filter:none}
+.btn.stop{background:var(--flag)}
+.warn{font-size:12px;color:var(--flag);margin:0}
+
+/* ラウンド */
+.rounds{margin-top:22px;display:flex;flex-direction:column;gap:0}
+.round{background:var(--card);border:1px solid var(--rule);border-radius:4px}
+.round > h2{font-size:13px;font-weight:700;margin:0;padding:10px 14px;
+  border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:9px}
+.round > h2 .no{font:700 11px/1.6 var(--font-mono);background:var(--ai-weak);color:var(--ai);
+  border-radius:3px;padding:1px 7px}
+.round > h2 .el{margin-left:auto;font:500 12px/1.6 var(--font-mono);color:var(--muted-2);
+  font-variant-numeric:tabular-nums}
+pre.code{font:400 12.5px/20px var(--font-mono);margin:0;padding:12px 0;overflow-x:auto;
+  white-space:pre;tab-size:4}
+pre.code .ln{display:block;padding-inline:14px}
+pre.code .ln.hit{background:var(--flag-weak);box-shadow:inset 2px 0 0 var(--flag)}
+pre.code.streaming{color:var(--muted)}
+.fnd{border-top:1px solid var(--rule);padding:4px 0}
+.fnd .f{padding:9px 14px;border-bottom:1px solid var(--rule)}
+.fnd .f:last-child{border-bottom:0}
+.fnd .f .top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.fnd .f .rule{font:700 11px/1.5 var(--font-mono);color:var(--card);background:var(--flag);
+  border-radius:3px;padding:1px 6px}
+.fnd .f .at{font:500 12px/1.5 var(--font-mono);color:var(--muted-2)}
+.fnd .f .msg{font-weight:700;font-size:13px;flex:1 1 100%;min-width:0;margin-top:2px}
+.fnd .f .hint{font-size:12.5px;color:var(--muted);margin:4px 0 0;padding-left:12px;
+  border-left:2px solid var(--rule)}
+.fnd .f .hint code,.fnd .f .msg code{font-family:var(--font-mono);font-size:.92em;
+  background:var(--ai-weak);color:var(--ai);border-radius:3px;padding:0 3px;
+  word-break:break-all}
+.quiet{padding:11px 14px;color:var(--ok);font-weight:700;font-size:13px}
+.arrow{align-self:center;color:var(--muted-2);font-size:12px;padding:9px 0;
+  display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.3}
+.arrow b{color:var(--ai);font-weight:700}
+
+/* 結果 */
+.result{margin-top:18px;border:1px solid var(--rule);border-left:3px solid var(--ok);
+  border-radius:4px;background:var(--card)}
+.result.bad{border-left-color:var(--flag)}
+.result > h2{font-family:var(--font-disp);font-size:16px;font-weight:600;margin:0;
+  padding:12px 14px 4px}
+.result p.note{font-size:12.5px;color:var(--muted);margin:0;padding:0 14px 11px}
+.result .bar{display:flex;gap:8px;padding:0 14px 13px;flex-wrap:wrap}
+.btn.ghost{background:transparent;color:var(--ai);border:1px solid var(--ai);font-weight:500;
+  font-size:13px;padding:6px 13px}
+.status{margin-top:16px;color:var(--muted);font-size:13px;display:flex;align-items:center;gap:8px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--rule);
+  border-top-color:var(--ai);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:3s}}
+footer{margin-top:30px;border-top:1px solid var(--rule);padding-top:13px;font-size:12px;
+  color:var(--muted-2)}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);
+  color:var(--paper);font-size:13px;padding:8px 16px;border-radius:999px;z-index:9}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header><h1>blindspot-loop</h1></header>
+<p class="sub">手元のモデルに書かせ、検査し、<strong>検査器が黙るまで差し戻します</strong>。
+コードはこの計算機から出ません。</p>
+
+<section class="ask">
+  <div>
+    <label class="lab" for="task">作りたいもの</label>
+    <textarea id="task" placeholder="例: アクセスされたパスを記録して、記録した件数を返す関数を書いて"></textarea>
+  </div>
+  <div class="opts">
+    <div>
+      <label class="lab" for="model">モデル</label>
+      <select id="model"><option>読み込み中…</option></select>
+    </div>
+    <div>
+      <label class="lab" for="rounds">差し戻しの上限</label>
+      <input type="number" id="rounds" value="3" min="1" max="6">
+    </div>
+    <label class="chk"><input type="checkbox" id="useRuff" checked> ruff も併用する</label>
+    <div class="grow"></div>
+    <button class="btn" id="go">書かせる</button>
+  </div>
+  <p class="warn" id="ruffWarn" hidden>ruff を切ると、小さいモデルが
+    <code>import</code> を落として動かないコードを返すことがあります。</p>
+</section>
+
+<div class="status" id="status" hidden></div>
+<div class="rounds" id="roundsBox"></div>
+<div id="result"></div>
+
+<footer>岐阜高専 専攻科 特別研究 ／ blindspot-lint</footer>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const elTask = $("task"), elModel = $("model"), elRounds = $("rounds"),
+      elRuff = $("useRuff"), elGo = $("go"), elStatus = $("status"),
+      elRoundsBox = $("roundsBox"), elResult = $("result"), elWarn = $("ruffWarn");
+
+let controller = null;
+let cards = [];          // ラウンドごとの DOM
+let rawBuf = [];         // ラウンドごとの生テキスト
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const codeify = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+/* 使えるモデルを並べる */
+(async () => {
+  try {
+    const r = await fetch("/api/models");
+    const d = await r.json();
+    elModel.innerHTML = "";
+    if (!d.models.length) {
+      elModel.innerHTML = "<option>ollama が応答しません</option>";
+      elGo.disabled = true;
+      setStatus("ollama が動いていません。別の端末で ollama serve を実行してください。", false);
+      return;
+    }
+    // コーディング特化の 7b を既定にする（研究で既定に用いた規模）
+    const pref = d.models.find((m) => m.startsWith("qwen2.5-coder:7b")) || d.models[0];
+    for (const m of d.models) {
+      const o = document.createElement("option");
+      o.value = m; o.textContent = m; o.selected = (m === pref);
+      elModel.appendChild(o);
+    }
+  } catch (e) {
+    elModel.innerHTML = "<option>読めません</option>";
+    elGo.disabled = true;
+  }
+})();
+
+elRuff.addEventListener("change", () => { elWarn.hidden = elRuff.checked; });
+
+function setStatus(text, spinning) {
+  elStatus.hidden = !text;
+  elStatus.innerHTML = text
+    ? (spinning ? '<span class="spin"></span>' : "") + esc(text) : "";
+}
+
+/* ラウンドの札を作る */
+function addRound(n) {
+  const d = document.createElement("section");
+  d.className = "round";
+  d.innerHTML =
+    `<h2><span class="no">${n + 1}回目</span>` +
+    `<span class="what">${n === 0 ? "書かせています" : "差し戻して直させています"}</span>` +
+    `<span class="el"></span></h2>` +
+    `<pre class="code streaming"></pre>`;
+  if (n > 0) {
+    const a = document.createElement("div");
+    a.className = "arrow";
+    a.innerHTML = "<b>↓</b>指摘を差し戻した";
+    elRoundsBox.appendChild(a);
+  }
+  elRoundsBox.appendChild(d);
+  cards[n] = d; rawBuf[n] = "";
+  d.scrollIntoView({block: "nearest", behavior: "smooth"});
+  return d;
+}
+
+function renderCode(card, code, hitLines) {
+  const pre = card.querySelector("pre.code");
+  pre.classList.remove("streaming");
+  if (code === null) {
+    pre.innerHTML = `<span class="ln">（コードブロックが返りませんでした）</span>`;
+    return;
+  }
+  const hits = new Set(hitLines || []);
+  pre.innerHTML = code.replace(/\s+$/, "").split("\n")
+    .map((l, i) => `<span class="ln${hits.has(i + 1) ? " hit" : ""}">${esc(l) || " "}</span>`)
+    .join("");
+}
+
+function renderFindings(card, findings, ruff) {
+  const all = [
+    ...findings.map((f) => ({...f, kind: "bs"})),
+    ...ruff.map((f) => ({...f, kind: "ruff", hint: "この名前が定義されていません。必要な import か定義を足してください。"})),
+  ].sort((a, b) => a.line - b.line);
+
+  const box = document.createElement("div");
+  if (!all.length) {
+    box.className = "quiet";
+    box.textContent = "検査器は何も言いませんでした。";
+  } else {
+    box.className = "fnd";
+    box.innerHTML = all.map((f) =>
+      `<div class="f"><div class="top">` +
+      `<span class="rule">${esc(f.rule)}</span>` +
+      `<span class="at">${f.line}行目</span>` +
+      `<span class="msg">${codeify(f.message)}</span></div>` +
+      `<p class="hint">${codeify(f.hint || "")}</p></div>`).join("");
+  }
+  card.appendChild(box);
+  return all.map((f) => f.line);
+}
+
+/* 実行 */
+async function run() {
+  const task = elTask.value.trim();
+  if (!task) { elTask.focus(); return; }
+
+  elRoundsBox.innerHTML = ""; elResult.innerHTML = ""; cards = []; rawBuf = [];
+  elGo.disabled = true; elGo.textContent = "実行中…";
+  setStatus("モデルを読み込んでいます…", true);
+
+  controller = new AbortController();
+  let resp;
+  try {
+    resp = await fetch("/api/run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task, model: elModel.value,
+                            rounds: Number(elRounds.value) || 3,
+                            use_ruff: elRuff.checked}),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    finish(); setStatus("つながりませんでした。", false); return;
+  }
+
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    let chunk;
+    try { chunk = await reader.read(); } catch (e) { break; }
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, {stream: true});
+    const parts = buf.split("\n\n");
+    buf = parts.pop();
+    for (const p of parts) {
+      const line = p.replace(/^data: /, "");
+      if (!line.trim()) continue;
+      let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+      handle(ev);
+    }
+  }
+  finish();
+}
+
+function handle(ev) {
+  const n = ev.round;
+  if (ev.kind === "warmup") {
+    setStatus(ev.model + " を読み込んでいます…", true);
+  } else if (ev.kind === "round") {
+    setStatus(n === 0 ? "書かせています…" : "差し戻して直させています…", true);
+    addRound(n);
+  } else if (ev.kind === "token") {
+    rawBuf[n] += ev.text;
+    const pre = cards[n].querySelector("pre.code");
+    pre.textContent = rawBuf[n].slice(-2200);
+    pre.scrollTop = pre.scrollHeight;
+  } else if (ev.kind === "code") {
+    const el = cards[n].querySelector(".el");
+    el.textContent = ev.wall_s + "秒" + (ev.done_reason === "length" ? "・上限で打ち切り" : "");
+    cards[n]._code = ev.code;
+    renderCode(cards[n], ev.code, []);
+    setStatus("検査しています…", true);
+  } else if (ev.kind === "findings") {
+    const lines = renderFindings(cards[n], ev.findings, ev.ruff);
+    renderCode(cards[n], cards[n]._code, lines);
+    cards[n].querySelector(".what").textContent =
+      lines.length ? `${lines.length}件の指摘` : "指摘なし";
+  } else if (ev.kind === "done") {
+    showResult(ev);
+  } else if (ev.kind === "error") {
+    setStatus("止まりました: " + ev.message, false);
+  }
+}
+
+function showResult(ev) {
+  const clean = ev.reason === "clean";
+  const d = document.createElement("div");
+  d.className = "result" + (clean ? "" : " bad");
+  let head, note;
+  if (clean) {
+    head = `${ev.round + 1}回で検査器が黙りました`;
+    note = "見ているのは blindspot の5項目と ruff の未定義名だけです。仕様どおり動くかは自分で確かめてください。";
+  } else if (ev.reason === "max_rounds") {
+    head = "上限まで回しても指摘が残りました";
+    note = "モデルが直しきれていません。残った指摘を読んで自分で直してください。";
+  } else {
+    head = "コードを取り出せませんでした";
+    note = "モデルがコードブロックを返しませんでした。頼み方を変えて試してください。";
+  }
+  d.innerHTML = `<h2>${esc(head)}</h2><p class="note">${esc(note)}</p>`;
+  if (ev.code) {
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const b = document.createElement("button");
+    b.className = "btn ghost"; b.textContent = "コードをコピー";
+    b.addEventListener("click", () => copy(ev.code));
+    bar.appendChild(b);
+    d.appendChild(bar);
+  }
+  elResult.appendChild(d);
+  setStatus("", false);
+}
+
+function finish() {
+  elGo.disabled = false; elGo.textContent = "書かせる";
+  controller = null;
+}
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const t = document.createElement("div");
+    t.className = "toast"; t.textContent = "コピーしました";
+    document.body.appendChild(t); setTimeout(() => t.remove(), 1700);
+  } catch (e) { /* 使えない環境では何もしない */ }
+}
+
+elGo.addEventListener("click", run);
+elTask.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") run();
+});
+elTask.value = "アクセスされたパスを記録して、これまでに記録した件数を返す関数 record(path) を書いて";
+</script>
+</body>
+</html>
