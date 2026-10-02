@@ -176,6 +176,8 @@ class Checker(ast.NodeVisitor):
         self.module_funcs = set()   # モジュール直下で定義された関数名
         self.attr_shrinking = set() # 縮む操作がある "関数名.属性名"
         self.floaty_names = set()   # float を生む式を代入された局所変数
+        self.alias = {}             # 局所変数 -> 指している元の名前（同じオブジェクト）
+        self.module_strs = {}       # モジュール直下の文字列定数 名前 -> 値
 
     # ---------- 収集 ----------
     def collect_module_state(self, tree):
@@ -185,6 +187,9 @@ class Checker(ast.NodeVisitor):
                 # deque(maxlen=N) のように上限が決まっているものは対象外
                 if _mutable_container(v) and not _bounded_container(v):
                     self.global_mutables[n.targets[0].id] = n.lineno
+                # 正規表現を定数に置いてから使う形を追うため（BS004）
+                if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    self.module_strs[n.targets[0].id] = v.value
         # モジュール直下で呼ばれている関数は初期化処理とみなす
         for n in tree.body:
             expr = n.value if isinstance(n, ast.Expr) else None
@@ -254,6 +259,41 @@ class Checker(ast.NodeVisitor):
         # float を生む式を代入された局所変数を集める（除算の変数出しを追う）。
         # 再代入で float でなくなる場合もあるが、保守的に「一度 floaty なら
         # floaty」とする。偽陽性の代償は実測で確認する。
+        # 単純な別名を追う（ys = xs のあと ys.sort() は xs を壊す）。
+        #
+        # 【なぜ必要か ― 2026-10-02 の実測】
+        # 5規則のうち4つが**変数代入1行で回避できた**。
+        #   def f(xs):
+        #       ys = xs
+        #       ys.sort()     ← BS001 が鳴らなかった
+        # 個別のバグではなく構造的な弱点だった。
+        #
+        # **1度だけ代入された名前**に限る。再代入されると別のオブジェクトを
+        # 指すので別名ではない。標準ライブラリにこの形があった:
+        #   possible_quotes = quote_types                       別名
+        #   possible_quotes = [q for q in possible_quotes ...]  新しいリストに差し替え
+        #   possible_quotes.sort()                              引数は壊れない
+        # 代入回数を数えない実装では、これが偽陽性になる。
+        # 1度だけに限ると標準ライブラリでの新規指摘は **0件**（BS001・BS005とも）。
+        assign_count = {}
+        for sub in ast.walk(node):
+            tgts = []
+            if isinstance(sub, ast.Assign): tgts = sub.targets
+            elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)): tgts = [sub.target]
+            elif isinstance(sub, (ast.For, ast.AsyncFor)): tgts = [sub.target]
+            elif isinstance(sub, ast.withitem) and sub.optional_vars:
+                tgts = [sub.optional_vars]
+            for t in tgts:
+                if isinstance(t, ast.Name):
+                    assign_count[t.id] = assign_count.get(t.id, 0) + 1
+        prev_alias = self.alias
+        self.alias = {}
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+               and isinstance(sub.targets[0], ast.Name) \
+               and isinstance(sub.value, ast.Name) \
+               and assign_count.get(sub.targets[0].id) == 1:
+                self.alias[sub.targets[0].id] = sub.value.id
         prev_floaty = self.floaty_names
         self.floaty_names = set()
         for sub in ast.walk(node):
@@ -267,18 +307,26 @@ class Checker(ast.NodeVisitor):
         self.cur_func = prev
         self.local_names = prev_local
         self.floaty_names = prev_floaty
+        self.alias = prev_alias
         self.params.pop()
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def _cur_params(self):
         return self.params[-1] if self.params else set()
 
+    def _deref(self, name, depth=4):
+        """別名をたどって元の名前を返す（ys = xs なら xs）"""
+        seen = set()
+        while name in self.alias and name not in seen and depth > 0:
+            seen.add(name); name = self.alias[name]; depth -= 1
+        return name
+
     def visit_Call(self, node):
         f = node.func
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
             name, attr = f.value.id, f.attr
-            # BS001 引数の破壊的変更
-            if attr in MUTATING and name in self._cur_params():
+            # BS001 引数の破壊的変更（別名経由も見る）
+            if attr in MUTATING and self._deref(name) in self._cur_params():
                 self.findings.append(Finding(
                     "BS001", node.lineno, node.col_offset,
                     f"引数 `{name}` を `{attr}()` で破壊的に変更しています",
@@ -301,17 +349,20 @@ class Checker(ast.NodeVisitor):
             # 1ファイルあたり 0.052 → 0.077 件。
             # この検査器の用途は LLM の生成コードを見ることなので、
             # 助言4件と引き換えに主要な形を拾うほうを選んだ。
+            root = self._deref(name)
             if attr in {"append", "extend", "update", "add"} \
-               and name in self.global_mutables and name not in self.shrinking \
-               and name not in self.local_names \
+               and root in self.global_mutables and root not in self.shrinking \
+               and (root not in self.local_names or root != name) \
                and self.params and self.cur_func not in self.module_called:
+                via = "" if root == name else f"（`{name}` 経由）"
                 self.findings.append(Finding(
                     "BS005", node.lineno, node.col_offset,
-                    f"モジュール変数 `{name}` に追加し続けており、取り除く処理がありません",
-                    f"`{name}` は {self.global_mutables[name]} 行目で定義されています。"
+                    f"モジュール変数 `{root}`{via} に追加し続けており、"
+                    "取り除く処理がありません",
+                    f"`{root}` は {self.global_mutables[root]} 行目で定義されています。"
                     "長時間動かすとメモリが増え続けます。"
                     f"`from collections import deque` して "
-                    f"`{name} = deque(maxlen=1000)` に置き換えるのが手軽です"))
+                    f"`{root} = deque(maxlen=1000)` に置き換えるのが手軽です"))
         # BS005 の第2の形：関数属性に貯める（record.paths.append(...)）
         #
         # 【なぜ必要か ― 2026-10-02 の実測】
@@ -343,9 +394,14 @@ class Checker(ast.NodeVisitor):
                     f"`{holder}.{attr} = deque(maxlen=1000)` に置き換えるのが手軽です"))
         # BS004 ReDoS
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "re":
+            # 文字列を直接渡す形と、モジュール定数に置いてから渡す形の両方を見る
+            pat = None
             if node.args and isinstance(node.args[0], ast.Constant) \
                and isinstance(node.args[0].value, str):
                 pat = node.args[0].value
+            elif node.args and isinstance(node.args[0], ast.Name):
+                pat = self.module_strs.get(self._deref(node.args[0].id))
+            if pat is not None:
                 if NESTED_QUANT.search(pat):
                     self.findings.append(Finding(
                         "BS004", node.lineno, node.col_offset,

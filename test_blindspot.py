@@ -62,6 +62,16 @@ CASES = [
  ("_ 始まりでも上限があれば対象外", "_REG = []\ndef f(x):\n    _REG.append(x)\n    while len(_REG) > 100:\n        _REG.pop(0)", set()),
  ("ローカル変数は対象外", "out = []\ndef f(items):\n    out = []\n    for i in items:\n        out.append(i)\n    return out", set()),
  ("初期化関数は対象外", "T = []\ndef reg(x):\n    T.append(x)\nreg(1)", set()),
+
+ # ---------- 変数経由での回避（5規則すべてを固定する） ----------
+ # 変数代入1行で検出を逃れられないこと。BS002 以外の4規則が逃れていた。
+ ("BS001 別名経由", "def f(xs):\n    ys = xs\n    ys.sort()\n    return ys[0]", {"BS001"}),
+ ("BS001 コピーは対象外", "def f(xs):\n    ys = list(xs)\n    ys.sort()\n    return ys[0]", set()),
+ ("BS001 再代入されたら対象外", "def f(xs):\n    ys = xs\n    ys = [q for q in ys if q]\n    ys.sort()", set()),
+ ("BS004 定数経由", 'import re\nPAT = r"(a+)+$"\ndef f(s):\n    return re.match(PAT, s)', {"BS004"}),
+ ("BS004 安全な定数は対象外", 'import re\nPAT = r"^[a-z]+$"\ndef f(s):\n    return re.match(PAT, s)', set()),
+ ("BS005 別名経由", "xs = []\ndef f(p):\n    ys = xs\n    ys.append(p)", {"BS005"}),
+ ("BS005 コピーは対象外", "xs = []\ndef f(p):\n    ys = list(xs)\n    ys.append(p)", set()),
  ("関数属性に貯める（14bが書く形）", "def record(path):\n    if not hasattr(record, 'paths'):\n        record.paths = []\n    record.paths.append(path)\n    return len(record.paths)", {"BS005"}),
  ("関数属性でも上限があれば対象外", "def record(p):\n    if not hasattr(record, 'xs'):\n        record.xs = []\n    record.xs.append(p)\n    while len(record.xs) > 10:\n        record.xs.pop(0)", set()),
  ("self への append は対象外", "class C:\n    def __init__(self):\n        self.xs = []\n    def add(self, v):\n        self.xs.append(v)", set()),
