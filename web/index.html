@@ -469,8 +469,13 @@ async function loadPyodideLoader() {
   paint();
   try {
     const base = await loadPyodideLoader();
+    const opts = {indexURL: base};
+    if (base === PYODIDE_LOCAL) {
+      // 配布先によっては .zip を置けないので、同梱版は拡張子を変えてある
+      opts.stdLibURL = base + "python_stdlib.wasm";
+    }
     const [py, src] = await Promise.all([
-      loadPyodide({indexURL: base}),
+      loadPyodide(opts),
       fetchChecker(),
     ]);
     py.FS.writeFile("blindspot.py", src, {encoding: "utf8"});
