@@ -25,6 +25,16 @@ CASES = [
  ("計算結果どうしの比較", "def f(rows):\n    t = 0.0\n    for _ in rows:\n        t = t + 0.1\n    return t == len(rows) * 0.1", {"BS002"}),
  ("定数との比較は対象外", "def f(s):\n    return s == 0.0", set()),
  ("isclose は正しい", "import math\ndef f(a, b):\n    return math.isclose(a, b)", set()),
+
+ # ---------- 査読で見つかった見落とし・誤検出（2026-10-02） ----------
+ ("ヒント文の例そのもの", "def f():\n    return 0.1 + 0.2 == 0.3", {"BS002"}),
+ ("平均とリテラルの比較", "def f(xs):\n    return sum(xs) / len(xs) == 0.3", {"BS002"}),
+ ("float で初期化した加算器", "def f(it):\n    t = 0.0\n    for x in it:\n        t += x\n    return t == 100.0", {"BS002"}),
+ ("copysign の符号判定は対象外", "import math\ndef f(v):\n    return math.copysign(1.0, v) == 1.0", set()),
+ ("Path の / は除算ではない", "from pathlib import Path\ndef f(a, b):\n    return Path(a) / 'x' == Path(b) / 'y'", set()),
+ ("タプルの比較は対象外", "def f(x, y, im):\n    return (x, y) != im.size", set()),
+ ("BS001 後ろの再代入では逃れられない", "def median(xs):\n    xs.sort()\n    m = xs[len(xs) // 2]\n    xs = None\n    return m", {"BS001"}),
+ ("__all__ は蓄積ではない", "__all__ = []\ndef _add(n):\n    __all__.append(n)", set()),
  ("除算を変数に出しても検出する", "def f(scores, target):\n    if not scores:\n        return False\n    average = sum(scores) / len(scores)\n    return average == target", {"BS002"}),
  ("変数を2段経由しても検出する", "def f(xs, t):\n    s = sum(xs) / len(xs)\n    a = s\n    return a == t", {"BS002"}),
  ("float を float で初期化した加算器", "def f(items, m):\n    total = 0.0\n    for c in items:\n        total += c\n    return total != m + 1", {"BS002"}),

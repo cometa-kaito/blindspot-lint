@@ -182,12 +182,42 @@ def _is_floaty(node, floaty_names=()):
         if isinstance(n, ast.Constant) and isinstance(n.value, float):
             return True
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
+            # `/` は数値以外にも使われる。Path("a") / "b" は除算ではないし、
+            # 比較の両辺がタプルや Path なら浮動小数点の話ではない。
+            # 【なぜ必要か ― 2026-10-02】
+            # 除外を特別値に絞った際、site-packages で BS002 が188件に増えた。
+            # 中身は Path(x) == Path(y) や (x, y) != im.size で、
+            # いずれも浮動小数点ではない。評価コーパスを標準ライブラリの
+            # トップレベルに限っていたため露出しなかった。
+            if not _numericish(n):
+                continue
             return True
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "float":
             return True
         if isinstance(n, ast.Name) and n.id in floaty_names:
             return True
     return False
+
+
+# 数値以外の型を強く示唆する呼び出し。これらが絡む `/` は除算ではない
+NON_NUMERIC_CALL = {"Path", "PurePath", "PosixPath", "WindowsPath"}
+
+
+def _numericish(binop):
+    """この除算は数値どうしか（Path の `/` などを除く）"""
+    for side in (binop.left, binop.right):
+        # ast.Str は Python 3.12 で削除された。ast.Constant で判定する
+        # （本検査器は 3.9 以降を対象とするため、両対応の書き方にはしない）
+        if isinstance(side, (ast.Tuple, ast.List, ast.JoinedStr)):
+            return False
+        if isinstance(side, ast.Constant) and isinstance(side.value, str):
+            return False
+        if isinstance(side, ast.Call):
+            nm = (side.func.id if isinstance(side.func, ast.Name)
+                  else side.func.attr if isinstance(side.func, ast.Attribute) else "")
+            if nm in NON_NUMERIC_CALL:
+                return False
+    return True
 
 
 # 入れ子の量化子。(a+)+ (a*)* (a+)* (a|b)+ などの破滅的バックトラック
@@ -281,13 +311,22 @@ class Checker(ast.NodeVisitor):
         #       if acc is None: acc = []      ← 可変デフォルト引数の正しい直し方
         #       acc.append(x)                 ← これは破壊的変更ではない
         # 誤検出するとモデルに不要な修正を促して壊しかねないので、保守的に外す。
-        rebound = set()
+        # 【順序を見る理由 ― 2026-10-02 の査読で判明】
+        # 以前は関数全体を走査していたため、破壊的変更より**後ろ**の代入でも
+        # 除外が効いた。次の形が鳴らなかった。
+        #   def median(xs):
+        #       xs.sort()      ← 呼び出し元のリストが並べ替わる
+        #       m = xs[len(xs) // 2]
+        #       xs = None      ← この代入で除外されていた
+        #       return m
+        # 代入の行番号を記録し、判定時にその時点より前の代入だけを見る。
+        self.rebound_at = {}
         for sub in ast.walk(node):
             if isinstance(sub, ast.Assign):
                 for tgt in sub.targets:
                     if isinstance(tgt, ast.Name) and tgt.id in names:
-                        rebound.add(tgt.id)
-        names -= rebound
+                        ln = self.rebound_at.get(tgt.id)
+                        self.rebound_at[tgt.id] = min(ln, sub.lineno) if ln else sub.lineno
         # self / cls は「呼び出し元のオブジェクトを勝手に変える」話とは別。
         # メソッドが自分の状態を変えるのは当然の設計である。
         names -= {"self", "cls"}
@@ -369,7 +408,10 @@ class Checker(ast.NodeVisitor):
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
             name, attr = f.value.id, f.attr
             # BS001 引数の破壊的変更（別名経由も見る）
-            if attr in MUTATING and self._deref(name) in self._cur_params():
+            root = self._deref(name)
+            reb = getattr(self, "rebound_at", {}).get(root)
+            if attr in MUTATING and root in self._cur_params() \
+               and not (reb is not None and reb < node.lineno):
                 self.findings.append(Finding(
                     "BS001", node.lineno, node.col_offset,
                     f"引数 `{name}` を `{attr}()` で破壊的に変更しています",
@@ -393,7 +435,13 @@ class Checker(ast.NodeVisitor):
             # この検査器の用途は LLM の生成コードを見ることなので、
             # 助言4件と引き換えに主要な形を拾うほうを選んだ。
             root = self._deref(name)
-            if attr in {"append", "extend", "update", "add"} \
+            # `__all__` は公開APIの宣言であって蓄積ではない。
+            # 標準ライブラリのトップレベル155ファイルはリテラル記法しか使って
+            # いないため露出しなかったが、numpy では __all__.append(...) で
+            # 誤検出した（2026-10-02）。評価コーパスの狭さが生んだ見落としである。
+            if root in {"__all__", "__path__"}:
+                pass
+            elif attr in {"append", "extend", "update", "add"} \
                and root in self.global_mutables and root not in self.shrinking \
                and (root not in self.local_names or root != name) \
                and self.params and self.cur_func not in self.module_called:
@@ -496,9 +544,27 @@ class Checker(ast.NodeVisitor):
             # 0.0 や 1.0 との比較は「ちょうどその値か」を見る正当な用途が多い
             # （copysign(1.0, f) == 1.0 で符号を見る等）。誤差が問題になるのは
             # 計算結果どうしの比較なので、片側が単純な定数なら除外する。
+            # 除外するのは「特別な値ちょうどか」を見る用途だけに絞る。
+            #
+            # 【なぜ絞るか ― 2026-10-02 の査読で判明】
+            # 以前は「片側が定数なら除外」としていたため、
+            #   0.1 + 0.2 == 0.3          ← この検査器自身のヒント文の例
+            #   sum(xs) / len(xs) == 0.3
+            #   total == 100.0            ← 0.0 で初期化した加算器
+            # をすべて見落としていた。除外の意図は copysign(1.0, f) == 1.0 の
+            # ような符号判定と x == 0.0 のゼロ判定であって、計算結果と任意の
+            # リテラルの比較まで外す必要はない。
+            SPECIAL = {0.0, 1.0, -1.0}
             def is_plain_const(x):
-                return isinstance(x, ast.Constant) or (
-                    isinstance(x, ast.UnaryOp) and isinstance(x.operand, ast.Constant))
+                v = None
+                if isinstance(x, ast.Constant):
+                    v = x.value
+                elif isinstance(x, ast.UnaryOp) and isinstance(x.op, ast.USub) \
+                        and isinstance(x.operand, ast.Constant):
+                    v = -x.operand.value if isinstance(x.operand.value, (int, float)) else None
+                if not isinstance(v, (int, float)) or isinstance(v, bool):
+                    return False
+                return float(v) in SPECIAL
             if isinstance(op, (ast.Eq, ast.NotEq)) \
                and (_is_floaty(node.left, self.floaty_names)
                     or _is_floaty(right, self.floaty_names)) \
