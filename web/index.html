@@ -216,10 +216,12 @@ python3 blindspot.py your_file.py</pre>
 </footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/pyodide@0.29.5/pyodide.js"></script>
 <script>
 "use strict";
-const PYODIDE_URL = "https://cdn.jsdelivr.net/npm/pyodide@0.29.5/";
+// Python 本体の置き場所。同梱されていればそれを使い、無ければ CDN から取る。
+// 配布用（同梱）とリポジトリ用（CDN）で同じファイルが動くようにしている。
+const PYODIDE_LOCAL = "pyodide/";
+const PYODIDE_CDN = "https://cdn.jsdelivr.net/npm/pyodide@0.29.5/";
 const CHECKER_CANDIDATES = ["blindspot.py", "../blindspot.py"];
 
 /* ---- 例。すべて実測に使ったコードか、自己テストに入っているもの ---- */
@@ -446,12 +448,29 @@ async function fetchChecker() {
   throw new Error(last || "見つかりません");
 }
 
+function loadScript(src) {
+  return new Promise((ok, ng) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = () => ok(); s.onerror = () => ng(new Error(src));
+    document.head.appendChild(s);
+  });
+}
+async function loadPyodideLoader() {
+  try {
+    const r = await fetch(PYODIDE_LOCAL + "pyodide.js", {method: "HEAD"});
+    if (r.ok) { await loadScript(PYODIDE_LOCAL + "pyodide.js"); return PYODIDE_LOCAL; }
+  } catch (e) { /* 同梱なし。CDN へ */ }
+  await loadScript(PYODIDE_CDN + "pyodide.js");
+  return PYODIDE_CDN;
+}
+
 (async () => {
   el.code.value = SAMPLES[0].code;
   paint();
   try {
+    const base = await loadPyodideLoader();
     const [py, src] = await Promise.all([
-      loadPyodide({indexURL: PYODIDE_URL}),
+      loadPyodide({indexURL: base}),
       fetchChecker(),
     ]);
     py.FS.writeFile("blindspot.py", src, {encoding: "utf8"});
