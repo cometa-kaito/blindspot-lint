@@ -44,11 +44,6 @@ jobs:
           blindspot --json blindspot.py > /dev/null
           blindspot-loop --help > /dev/null
           # リポジトリ直下だと手元の blindspot_loop.py を読んでしまうので外へ出る
-          cd /tmp && python3 -c "
-import blindspot_loop, pathlib
-d = pathlib.Path(blindspot_loop.__file__).resolve().parent
-assert d.name == 'site-packages', f'入れたものではなく {d} を読んでいる'
-assert (d / 'blindspot_assets' / 'loop.html').exists(), '画面の HTML が同梱されていない'
-print('画面の HTML も入っている')
-"
+          cd /tmp && python3 -c "import blindspot_loop, pathlib; d = pathlib.Path(blindspot_loop.__file__).resolve().parent; assert d.name == 'site-packages', d; assert (d / 'blindspot_assets' / 'loop.html').exists(), 'loop.html が同梱されていない'; print('画面の HTML も入っている')"
+          cd - > /dev/null
           echo "コマンドとして動作"
