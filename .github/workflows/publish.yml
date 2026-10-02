@@ -9,7 +9,10 @@ name: publish
 #     Owner             : cometa-kaito
 #     Repository name   : blindspot-lint
 #     Workflow name     : publish.yml
-#     Environment name  : pypi
+#     Environment name  : （空欄のまま）
+#
+# Environment は意図的に使っていない。PyPI 側の設定と1つでも食い違うと
+# invalid-publisher になるため、照合する項目を減らしている。
 #
 # 登録後、公開するには
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -44,7 +47,6 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       id-token: write          # Trusted Publishing に必要
     steps:
