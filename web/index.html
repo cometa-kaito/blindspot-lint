@@ -1,0 +1,485 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>blindspot 検査室</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* 計器の配置。左にコード、右に指摘。下に5規則の台帳。藍のインクと紙。 */
+:root{
+  --paper:#f2f5f6; --card:#ffffff; --ink:#15222b;
+  --muted:#5a6b74; --rule:#d2dade;
+  --ai:#1d5a76;            /* 藍。検査器自身の声 */
+  --ai-weak:#e4eef3;
+  --flag:#a33c1c;          /* 指摘の色 */
+  --flag-weak:#f7e9e3;
+  --ok:#1d6b50;
+  --font-disp:"Zen Old Mincho",serif;
+  --font-body:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --muted-2:#79898f;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0e151a; --card:#17212a; --ink:#dde7eb; --muted:#93a6ae; --rule:#2a3a45;
+  --ai:#74b6d2; --ai-weak:#15303d; --flag:#e4906b; --flag-weak:#33211a; --ok:#6cc39d;
+  --muted-2:#7d8f98; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#0e151a; --card:#17212a; --ink:#dde7eb; --muted:#93a6ae; --rule:#2a3a45;
+  --ai:#74b6d2; --ai-weak:#15303d; --flag:#e4906b; --flag-weak:#33211a; --ok:#6cc39d;
+  --muted-2:#7d8f98; color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-body);
+  font-size:14px;line-height:1.75;margin:0}
+.page{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:28px 48px}
+
+/* ---- 見出し ---- */
+header{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 18px;
+  border-bottom:1px solid var(--rule);padding-bottom:14px;margin-bottom:22px}
+h1{font-family:var(--font-disp);font-size:clamp(23px,4.2vw,31px);font-weight:700;
+  margin:0;letter-spacing:.02em;text-wrap:balance}
+h1 .mono{font-family:var(--font-mono);font-weight:500;font-size:.78em;color:var(--ai)}
+.tagline{color:var(--muted);font-size:13px;margin:0;max-width:56ch;flex:1 1 320px;min-width:0}
+
+/* ---- 作業面 ---- */
+.bench{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:18px;
+  align-items:start}
+@media (max-width:860px){.bench{grid-template-columns:minmax(0,1fr)}}
+
+.panel{background:var(--card);border:1px solid var(--rule);border-radius:4px;min-width:0}
+.panel > h2{font-family:var(--font-body);font-size:11px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted-2);margin:0;padding:11px 14px 9px;
+  border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;
+  align-items:center;gap:10px}
+.panel > h2 .count{font-family:var(--font-mono);letter-spacing:0;text-transform:none;
+  font-size:12px;font-variant-numeric:tabular-nums}
+
+/* 例の切り替え */
+.samples{display:flex;flex-wrap:wrap;gap:6px;padding:11px 14px;border-bottom:1px solid var(--rule)}
+.samples button{font:500 12px/1.4 var(--font-body);color:var(--muted);background:transparent;
+  border:1px solid var(--rule);border-radius:999px;padding:3px 11px;cursor:pointer}
+.samples button:hover{color:var(--ai);border-color:var(--ai)}
+.samples button[aria-pressed="true"]{background:var(--ai-weak);border-color:var(--ai);color:var(--ai)}
+
+/* 編集面：行番号・ハイライト・入力を同じ字送りで重ねる */
+.editor{display:flex;position:relative;max-height:min(58vh,520px);overflow:hidden}
+.gutter,.marks,#code{font:400 13px/21px var(--font-mono);padding-block:12px;margin:0;border:0}
+.gutter{flex:0 0 auto;width:3.4em;text-align:right;padding-inline:0 10px;color:var(--muted-2);
+  background:transparent;overflow:hidden;user-select:none;font-variant-numeric:tabular-nums;
+  border-right:1px solid var(--rule);white-space:pre}
+.gutter b{display:block;font-weight:700;color:var(--flag)}
+.codewrap{position:relative;flex:1 1 auto;min-width:0}
+.marks{position:absolute;inset:0;padding-inline:12px;overflow:hidden;pointer-events:none;
+  white-space:pre;color:transparent}
+.marks i{display:block;height:21px}
+.marks i.hit{background:var(--flag-weak);box-shadow:inset 2px 0 0 var(--flag)}
+.marks i.focus{background:var(--ai-weak);box-shadow:inset 2px 0 0 var(--ai)}
+#code{display:block;width:100%;min-height:300px;max-height:min(58vh,520px);resize:vertical;
+  padding-inline:12px;background:transparent;color:var(--ink);white-space:pre;overflow:auto;
+  tab-size:4;position:relative}
+#code:focus{outline:2px solid var(--ai);outline-offset:-2px}
+
+/* 指摘 */
+.findings{padding:4px 0;max-height:min(58vh,520px);overflow:auto}
+.finding{display:block;width:100%;text-align:left;background:transparent;border:0;
+  border-bottom:1px solid var(--rule);padding:12px 14px;cursor:pointer;font:inherit;color:inherit}
+.finding:last-child{border-bottom:0}
+.finding:hover,.finding:focus-visible{background:var(--flag-weak);outline:0}
+.finding .top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.finding .rule{font:700 11px/1.5 var(--font-mono);letter-spacing:.06em;color:var(--card);
+  background:var(--flag);border-radius:3px;padding:1px 6px}
+.finding .at{font:500 12px/1.5 var(--font-mono);color:var(--muted-2);
+  font-variant-numeric:tabular-nums}
+.finding .msg{font-weight:700;font-size:13.5px;flex:1 1 100%;min-width:0;margin-top:2px}
+.finding .hint{font-size:13px;color:var(--muted);margin:5px 0 0;padding-left:13px;
+  border-left:2px solid var(--rule)}
+.finding .hint code{font-family:var(--font-mono);font-size:.92em;background:var(--ai-weak);
+  color:var(--ai);border-radius:3px;padding:0 3px;word-break:break-all}
+
+.state{padding:26px 16px;text-align:center;color:var(--muted)}
+.state strong{display:block;font-family:var(--font-disp);font-size:16px;color:var(--ink);
+  font-weight:600;margin-bottom:5px}
+.state.clean strong{color:var(--ok)}
+.state code{font-family:var(--font-mono);font-size:12.5px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--rule);
+  border-top-color:var(--ai);border-radius:50%;animation:sp .8s linear infinite;
+  vertical-align:-1px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:3s}}
+
+/* 差し戻し */
+.handback{border-top:1px solid var(--rule);padding:13px 14px;display:flex;flex-wrap:wrap;
+  gap:8px;align-items:center}
+.btn{font:700 13px/1.5 var(--font-body);background:var(--ai);color:var(--paper);border:0;
+  border-radius:3px;padding:7px 14px;cursor:pointer}
+.btn:hover{filter:brightness(1.12)}
+.btn[disabled]{opacity:.4;cursor:default;filter:none}
+.btn.ghost{background:transparent;color:var(--ai);border:1px solid var(--ai);font-weight:500}
+.hb-note{font-size:12px;color:var(--muted-2);flex:1 1 220px;min-width:0}
+
+/* 台帳 */
+.ledger{margin-top:34px}
+.ledger h2{font-family:var(--font-disp);font-size:19px;font-weight:600;margin:0 0 4px}
+.ledger p.lead{color:var(--muted);font-size:13px;margin:0 0 16px;max-width:66ch}
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:4px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:620px;font-size:13px}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);
+  font-weight:700;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.r{font-family:var(--font-mono);font-weight:700;color:var(--ai);white-space:nowrap}
+td.n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+td small{color:var(--muted-2)}
+
+.caveat{margin-top:22px;border:1px solid var(--rule);border-left:3px solid var(--flag);
+  border-radius:4px;background:var(--card);padding:14px 16px}
+.caveat h3{font-family:var(--font-disp);font-size:15px;font-weight:600;margin:0 0 6px}
+.caveat p{margin:0 0 8px;font-size:13px;color:var(--muted)}
+.caveat p:last-child{margin-bottom:0}
+pre.cmd{font:500 12.5px/1.7 var(--font-mono);background:var(--ai-weak);color:var(--ai);
+  border-radius:3px;padding:9px 12px;margin:0;overflow-x:auto}
+
+footer{margin-top:34px;border-top:1px solid var(--rule);padding-top:14px;font-size:12px;
+  color:var(--muted-2);display:flex;flex-wrap:wrap;gap:4px 16px}
+footer a{color:var(--ai)}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--ink);
+  color:var(--paper);font-size:13px;padding:8px 16px;border-radius:999px;z-index:9;
+  box-shadow:0 4px 18px rgba(0,0,0,.22)}
+</style>
+
+<div class="page">
+<header>
+  <h1>blindspot <span class="mono">検査室</span></h1>
+  <p class="tagline">ローカルLLMが見落とす5種類の欠陥だけを探します。コードはこのページの中だけで検査され、どこにも送信されません。</p>
+</header>
+
+<div class="bench">
+  <!-- 左：コード -->
+  <section class="panel">
+    <h2>検査するコード<span class="count" id="lines"></span></h2>
+    <div class="samples" id="samples"></div>
+    <div class="editor">
+      <div class="gutter" id="gutter" aria-hidden="true"></div>
+      <div class="codewrap">
+        <div class="marks" id="marks" aria-hidden="true"></div>
+        <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off"
+          aria-label="検査する Python コード"></textarea>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右：指摘 -->
+  <section class="panel">
+    <h2>指摘<span class="count" id="total"></span></h2>
+    <div class="findings" id="findings">
+      <div class="state"><span class="spin"></span>検査器を読み込んでいます</div>
+    </div>
+    <div class="handback">
+      <button class="btn" id="copyPrompt" disabled>LLMに差し戻す文面をコピー</button>
+      <button class="btn ghost" id="copyJson" disabled>JSON</button>
+      <span class="hb-note" id="hbNote">指摘が出たら、この文面をそのままモデルに貼り返します。</span>
+    </div>
+  </section>
+</div>
+
+<!-- 台帳 -->
+<section class="ledger">
+  <h2>なぜこの5項目なのか</h2>
+  <p class="lead">6モデル・30欠陥・1080件の測定から、<strong>ローカルLLMの検出率が低い</strong>欠陥を特定し、そのうち構文木で決定的に判定できるものに限っています。「検出率」はコードレビューを指示したときにその欠陥を指摘した割合です。</p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>規則</th><th>見つけるもの</th><th>ローカルLLMの検出率</th><th>既存リンターとの関係</th></tr></thead>
+    <tbody>
+      <tr><td class="r">BS001</td><td>引数のリストを破壊的に並べ替える・消す</td><td class="n">0%</td><td>ruff・pylint・bandit は拾わない</td></tr>
+      <tr><td class="r">BS002</td><td>浮動小数点の計算結果を <code>==</code> で比べる</td><td class="n">0%</td><td>ruff <code>RUF069</code>（preview）と一部重複</td></tr>
+      <tr><td class="r">BS003</td><td>値の比較に <code>is</code> を使う</td><td class="n">0%</td><td><small>リテラル比較は ruff <code>F632</code> が既定で拾う</small></td></tr>
+      <tr><td class="r">BS004</td><td>正規表現の入れ子量化子（ReDoS）</td><td class="n">2%</td><td>ruff・pylint・bandit は拾わない</td></tr>
+      <tr><td class="r">BS005</td><td>解放されない場所に無制限に貯め続ける</td><td class="n">0%</td><td>ruff・pylint・bandit は拾わない</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="caveat">
+    <h3>この検査器だけでは足りません</h3>
+    <p>見るのは上の5項目だけです。未定義の名前や文法の誤りは見ません。実測では、この検査器の指摘どおりに直したモデルが必要な <code>import</code> を落とし、実行できないコードを返す事例が出ました。必ず併用してください。</p>
+    <pre class="cmd">pip install ruff
+ruff check --select F821 your_file.py
+python3 blindspot.py your_file.py</pre>
+  </div>
+</section>
+
+<footer>
+  <span>岐阜高専 専攻科 特別研究</span>
+  <span><a href="https://github.com/cometa-kaito/blindspot-lint">github.com/cometa-kaito/blindspot-lint</a></span>
+  <span id="engine">検査は Python 本体を WebAssembly で動かして行います</span>
+</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pyodide@0.29.5/pyodide.js"></script>
+<script>
+"use strict";
+const PYODIDE_URL = "https://cdn.jsdelivr.net/npm/pyodide@0.29.5/";
+const CHECKER_CANDIDATES = ["blindspot.py", "../blindspot.py"];
+
+/* ---- 例。すべて実測に使ったコードか、自己テストに入っているもの ---- */
+const SAMPLES = [
+  {name:"レビュー課題 axis01", code:
+`import sqlite3
+def avg_of(name, xs):
+    assert name, "name required"
+    conn = sqlite3.connect("app.db")
+    conn.execute("SELECT 1 FROM t WHERE n = '" + name + "'")
+    xs.sort()
+    return sum(xs) / len(xs)
+`},
+  {name:"平均と比べる", code:
+`def is_passing(scores, target):
+    if not scores:
+        return False
+    average = sum(scores) / len(scores)
+    return average == target
+`},
+  {name:"貯め続ける", code:
+`_recorded_paths = []
+
+def record(path):
+    global _recorded_paths
+    _recorded_paths.append(path)
+    return len(_recorded_paths)
+`},
+  {name:"正規表現", code:
+`import re
+
+PATTERN = r"(a+)+$"
+
+def looks_valid(s):
+    return re.match(PATTERN, s)
+`},
+  {name:"is で比べる", code:
+`def index_of(xs, target):
+    for i in range(len(xs)):
+        if xs[i] is target:
+            return i
+    return -1
+`},
+  {name:"鳴らない正しいコード", code:
+`import math
+from collections import deque
+
+history = deque(maxlen=1000)
+
+def summarize(values, expected):
+    ordered = sorted(values)
+    history.append(ordered[0] if ordered else None)
+    return math.isclose(sum(ordered), expected)
+`},
+];
+
+const $ = (id) => document.getElementById(id);
+const el = {code:$("code"), gutter:$("gutter"), marks:$("marks"), findings:$("findings"),
+  total:$("total"), lines:$("lines"), samples:$("samples"), copyPrompt:$("copyPrompt"),
+  copyJson:$("copyJson"), hbNote:$("hbNote"), engine:$("engine")};
+
+let checkFn = null;       // Python 側の検査関数
+let current = [];         // いまの指摘
+let focusLine = 0;
+
+/* ---- 例のボタン ---- */
+SAMPLES.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = s.name; b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
+  b.addEventListener("click", () => {
+    el.code.value = s.code;
+    [...el.samples.children].forEach((o) => o.setAttribute("aria-pressed", o === b ? "true" : "false"));
+    el.code.scrollTop = 0; focusLine = 0; onInput();
+  });
+  el.samples.appendChild(b);
+});
+
+/* ---- 行番号とハイライトを入力に追従させる ---- */
+function paint() {
+  const n = el.code.value.split("\n").length;
+  const hits = new Set(current.map((f) => f.line));
+  let g = "", m = "";
+  for (let i = 1; i <= n; i++) {
+    g += hits.has(i) ? `<b>${i}</b>` : `${i}\n`;
+    const cls = i === focusLine ? "focus" : (hits.has(i) ? "hit" : "");
+    m += `<i class="${cls}"></i>`;
+  }
+  el.gutter.innerHTML = g;
+  el.marks.innerHTML = m;
+  el.lines.textContent = `${n} 行`;
+  sync();
+}
+function sync() {
+  el.gutter.scrollTop = el.code.scrollTop;
+  el.marks.scrollTop = el.code.scrollTop;
+  el.marks.style.transform = `translateX(${-el.code.scrollLeft}px)`;
+}
+el.code.addEventListener("scroll", sync);
+
+/* ---- 表示 ---- */
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+}
+function hintHtml(s) {           // `...` をコードとして出す。CLI の折り返しは不要
+  return escapeHtml(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+function render(result) {
+  current = result.findings || [];
+  el.findings.textContent = "";
+
+  if (result.error) {
+    el.total.textContent = "";
+    el.findings.innerHTML =
+      `<div class="state"><strong>まだ検査できません</strong>Python として読めません。${escapeHtml(result.error)}</div>`;
+  } else if (!current.length) {
+    el.total.textContent = "0 件";
+    el.findings.innerHTML =
+      `<div class="state clean"><strong>この5項目に問題はありません</strong>` +
+      `見ているのは BS001〜BS005 だけです。<code>ruff check</code> も必ず通してください。</div>`;
+  } else {
+    el.total.textContent = `${current.length} 件`;
+    for (const f of current) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "finding";
+      b.innerHTML =
+        `<span class="top"><span class="rule">${f.rule}</span>` +
+        `<span class="at">${f.line}行目</span>` +
+        `<span class="msg">${escapeHtml(f.message)}</span></span>` +
+        `<p class="hint">${hintHtml(f.hint)}</p>`;
+      b.addEventListener("click", () => jumpTo(f.line));
+      el.findings.appendChild(b);
+    }
+  }
+  const has = current.length > 0;
+  el.copyPrompt.disabled = !has;
+  el.copyJson.disabled = !has;
+  el.hbNote.textContent = has
+    ? "測定で用いた差し戻し文面と同じ形です。そのままモデルに貼り返せます。"
+    : "指摘が出たら、この文面をそのままモデルに貼り返します。";
+  paint();
+}
+
+function jumpTo(line) {
+  focusLine = line;
+  const lines = el.code.value.split("\n");
+  let pos = 0;
+  for (let i = 0; i < line - 1 && i < lines.length; i++) pos += lines[i].length + 1;
+  el.code.focus();
+  el.code.setSelectionRange(pos, pos + (lines[line - 1] || "").length);
+  el.code.scrollTop = Math.max(0, (line - 4) * 21);
+  paint();
+}
+
+/* ---- 検査 ---- */
+let timer = null;
+function onInput() {
+  clearTimeout(timer);
+  timer = setTimeout(run, 220);
+  paint();
+}
+el.code.addEventListener("input", onInput);
+
+function run() {
+  if (!checkFn) return;
+  let out;
+  try {
+    out = JSON.parse(checkFn(el.code.value));
+  } catch (e) {
+    out = {error: String(e).slice(0, 180)};
+  }
+  render(out);
+}
+
+/* ---- 差し戻し文面。harness/agent.py の feedback_prompt と同じ形 ---- */
+function handbackText() {
+  const lines = current
+    .map((f) => `- ${f.rule} ${f.line}行目: ${f.message}\n  → ${f.hint}`)
+    .join("\n");
+  return "あなたの回答に対して静的検査を行ったところ、次の指摘がありました。\n\n" +
+    "```python\n" + el.code.value.replace(/\s*$/, "") + "\n```\n\n" +
+    "【検査結果】\n" + lines + "\n\n" +
+    "これらを修正してください。**元の仕様と振る舞いを変えないこと。**\n" +
+    "指摘箇所以外は変更しないでください。修正後の完全なコードをコードブロックで示してください。";
+}
+
+function toast(msg) {
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = msg; t.setAttribute("role", "status");
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 1900);
+}
+async function copy(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(label + "をコピーしました");
+  } catch (e) {
+    // クリップボードが使えない環境では、選べる状態にして自分で取ってもらう
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:16px;right:16px;bottom:16px;height:40vh;z-index:9;font:12px monospace";
+    document.body.appendChild(ta); ta.select();
+    toast("コピーできないので選択しました。⌘C で取ってください");
+    ta.addEventListener("blur", () => ta.remove(), {once: true});
+  }
+}
+el.copyPrompt.addEventListener("click", () => copy(handbackText(), "差し戻しの文面"));
+el.copyJson.addEventListener("click",
+  () => copy(JSON.stringify(current, null, 2), "JSON"));
+
+/* ---- 起動 ---- */
+async function fetchChecker() {
+  let last = null;
+  for (const url of CHECKER_CANDIDATES) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        const t = await r.text();
+        if (t.includes("def check_source")) return t;
+      }
+      last = `${url}: ${r.status}`;
+    } catch (e) { last = `${url}: ${e}`; }
+  }
+  throw new Error(last || "見つかりません");
+}
+
+(async () => {
+  el.code.value = SAMPLES[0].code;
+  paint();
+  try {
+    const [py, src] = await Promise.all([
+      loadPyodide({indexURL: PYODIDE_URL}),
+      fetchChecker(),
+    ]);
+    py.FS.writeFile("blindspot.py", src, {encoding: "utf8"});
+    checkFn = py.runPython(`
+import json, sys
+sys.path.insert(0, "")
+import blindspot
+
+def _check(src):
+    try:
+        fs = blindspot.check_source(src)
+    except SyntaxError as e:
+        return json.dumps({"error": f"{e.msg}（{e.lineno}行目）"}, ensure_ascii=False)
+    except (ValueError, RecursionError) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    return json.dumps({"findings": [f.as_dict() for f in fs]}, ensure_ascii=False)
+
+_check
+`);
+    el.engine.textContent = "検査器は " + py.runPython("import sys; '.'.join(map(str, sys.version_info[:3]))") +
+      " の Python をブラウザ内で動かしています";
+    run();
+  } catch (e) {
+    el.findings.innerHTML =
+      `<div class="state"><strong>検査器を読み込めませんでした</strong>` +
+      `回線を確認して再読み込みしてください。手元で動かすなら ` +
+      `<code>python3 blindspot.py ファイル名</code> が同じ結果を出します。</div>` ;
+    el.engine.textContent = String(e).slice(0, 140);
+  }
+})();
+</script>
