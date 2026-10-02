@@ -6,29 +6,65 @@
 
 ## 使い方
 
-**ファイルをコピーするだけでも動きます。**
+### まず試す（インストールなし）
+
+ファイル1つで動きます。依存はありません。
 
 ```bash
+curl -sO https://raw.githubusercontent.com/cometa-kaito/blindspot-lint/main/blindspot.py
 python3 blindspot.py your_code.py
-python3 blindspot.py --json src/*.py      # 機械処理向け
 ```
 
-pip で入れるとコマンドとして使えます。
+手元にある Python ファイルをまとめて見るなら:
 
 ```bash
-pip install blindspot-lint
+python3 blindspot.py *.py
+```
+
+### コマンドとして入れる
+
+```bash
+pip install git+https://github.com/cometa-kaito/blindspot-lint
 blindspot your_code.py
+```
+
+PyPI にはまだ公開していないので、`pip install blindspot-lint` は使えません。
+
+### LLM に直させる
+
+`--json` で機械可読な出力が得られます。
+**このとき ruff を併用してください**（理由は「限界」の節）。
+
+```bash
+blindspot --json generated.py
+ruff check --select F821 generated.py
 ```
 
 指摘が1件でもあれば終了コード 1 を返すので、CI や
 エディタの保存時フックにそのまま組み込めます。
 
-LLM に書かせたコードを検査して差し戻す、という使い方を想定しています。
-`--json` で機械可読な出力が得られます。
+### コミット前に自動で走らせる
+
+`.pre-commit-config.yaml` にこう書きます。
+
+```yaml
+repos:
+  - repo: https://github.com/cometa-kaito/blindspot-lint
+    rev: main
+    hooks:
+      - id: blindspot
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff
+        args: [--select, F821]
+```
 
 ```bash
-blindspot --json generated.py
+pip install pre-commit && pre-commit install
 ```
+
+`--json` の出力はこうなります。
 
 ```json
 [{"file": "generated.py", "rule": "BS001", "line": 4, "col": 4,

@@ -1,0 +1,14 @@
+# pre-commit から使うための定義。
+# 利用側の .pre-commit-config.yaml に次を書くと、コミット前に走る。
+#
+#   repos:
+#     - repo: https://github.com/cometa-kaito/blindspot-lint
+#       rev: main
+#       hooks:
+#         - id: blindspot
+- id: blindspot
+  name: blindspot（ローカルLLMの盲点を検査）
+  description: 実行時にしか現れない5種類の欠陥を構文木で検査します
+  entry: blindspot
+  language: python
+  types: [python]

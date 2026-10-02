@@ -1,0 +1,40 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 自己テスト
+        run: python3 test_blindspot.py
+
+      - name: 自分自身を検査する（警告ゼロであること）
+        run: python3 blindspot.py blindspot.py test_blindspot.py
+
+      - name: 標準ライブラリでの偽陽性を数える
+        run: |
+          SL=$(python3 -c "import sysconfig; print(sysconfig.get_paths()['stdlib'])")
+          N=$(python3 blindspot.py $SL/*.py 2>/dev/null | grep -cE ':[0-9]+:[0-9]+: BS0' || true)
+          echo "標準ライブラリでの指摘: ${N}件"
+          # 実コードで鳴りすぎる検査器は使われない。上限を決めて退行を防ぐ。
+          if [ "$N" -gt 20 ]; then
+            echo "::error::指摘が ${N} 件に増えました（上限20件）"
+            exit 1
+          fi
+
+      - name: インストールできることを確認する
+        run: |
+          python3 -m pip install --quiet .
+          blindspot --json blindspot.py > /dev/null
+          echo "コマンドとして動作"
