@@ -58,6 +58,11 @@ CASES = [
  ("関数属性に貯める（14bが書く形）", "def record(path):\n    if not hasattr(record, 'paths'):\n        record.paths = []\n    record.paths.append(path)\n    return len(record.paths)", {"BS005"}),
  ("関数属性でも上限があれば対象外", "def record(p):\n    if not hasattr(record, 'xs'):\n        record.xs = []\n    record.xs.append(p)\n    while len(record.xs) > 10:\n        record.xs.pop(0)", set()),
  ("self への append は対象外", "class C:\n    def __init__(self):\n        self.xs = []\n    def add(self, v):\n        self.xs.append(v)", set()),
+ ("deque(maxlen) は対象外", "from collections import deque\nxs = deque(maxlen=1000)\ndef f(p):\n    xs.append(p)\n    return len(xs)", set()),
+ ("関数属性の deque(maxlen) も対象外", "from collections import deque\ndef f(p):\n    if not hasattr(f, 'xs'):\n        f.xs = deque(maxlen=1000)\n    f.xs.append(p)", set()),
+ ("上限なしの deque は検出する", "from collections import deque\nxs = deque()\ndef f(p):\n    xs.append(p)", {"BS005"}),
+ ("maxlen=None は上限なし", "from collections import deque\nxs = deque(maxlen=None)\ndef f(p):\n    xs.append(p)", {"BS005"}),
+ ("defaultdict も検出する", "from collections import defaultdict\nc = defaultdict(list)\ndef f(k, v):\n    c.update({k: v})", {"BS005"}),
 ]
 
 def main():

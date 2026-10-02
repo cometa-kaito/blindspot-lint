@@ -39,6 +39,37 @@ class Finding:
 EXACT_NUMERIC = {"Decimal", "Fraction"}
 
 
+def _bounded_container(node):
+    """上限が決まったコンテナか（deque(maxlen=N) など）
+
+    【なぜ必要か ― 2026-10-02】
+    BS005 の直し方として `collections.deque(maxlen=N)` を勧めることにしたが、
+    そのまま勧めると**検査器が自分の勧めた修正を指摘し続ける**。
+    BS002 で `Decimal` に対して同じ誤りをしていたので、先に確認して直した。
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    name = (node.func.id if isinstance(node.func, ast.Name)
+            else node.func.attr if isinstance(node.func, ast.Attribute) else "")
+    if name != "deque":
+        return False
+    return any(k.arg == "maxlen" and not (
+        isinstance(k.value, ast.Constant) and k.value.value is None)
+        for k in node.keywords)
+
+
+def _mutable_container(node):
+    """追加していける可変コンテナか"""
+    if isinstance(node, (ast.List, ast.Dict, ast.Set)):
+        return True
+    if isinstance(node, ast.Call):
+        name = (node.func.id if isinstance(node.func, ast.Name)
+                else node.func.attr if isinstance(node.func, ast.Attribute) else "")
+        return name in {"list", "dict", "set", "deque", "defaultdict", "Counter",
+                        "OrderedDict"}
+    return False
+
+
 def _is_floaty(node):
     """float リテラルか、float を生みうる演算（除算・float() 呼び出し）を含むか
 
@@ -93,9 +124,8 @@ class Checker(ast.NodeVisitor):
         for n in tree.body:
             if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
                 v = n.value
-                if (isinstance(v, (ast.List, ast.Dict, ast.Set)) or
-                        (isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
-                         and v.func.id in {"list", "dict", "set"})):
+                # deque(maxlen=N) のように上限が決まっているものは対象外
+                if _mutable_container(v) and not _bounded_container(v):
                     self.global_mutables[n.targets[0].id] = n.lineno
         # モジュール直下で呼ばれている関数は初期化処理とみなす
         for n in tree.body:
@@ -121,6 +151,12 @@ class Checker(ast.NodeVisitor):
                and isinstance(n.func.value, ast.Attribute) \
                and isinstance(n.func.value.value, ast.Name):
                 self.attr_shrinking.add(f"{n.func.value.value.id}.{n.func.value.attr}")
+            # 関数属性に上限付きコンテナを入れているなら対象外
+            # （record.paths = deque(maxlen=1000)）
+            if isinstance(n, ast.Assign) and _bounded_container(n.value):
+                for t in n.targets:
+                    if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name):
+                        self.attr_shrinking.add(f"{t.value.id}.{t.attr}")
             if isinstance(n, ast.Delete):
                 for t in n.targets:
                     base = t.value if isinstance(t, ast.Subscript) else t
@@ -204,7 +240,9 @@ class Checker(ast.NodeVisitor):
                     "BS005", node.lineno, node.col_offset,
                     f"モジュール変数 `{name}` に追加し続けており、取り除く処理がありません",
                     f"`{name}` は {self.global_mutables[name]} 行目で定義されています。"
-                    "長時間動かすとメモリが増え続けます。上限を設けるか明示的に解放してください"))
+                    "長時間動かすとメモリが増え続けます。"
+                    f"`from collections import deque` して "
+                    f"`{name} = deque(maxlen=1000)` に置き換えるのが手軽です"))
         # BS005 の第2の形：関数属性に貯める（record.paths.append(...)）
         #
         # 【なぜ必要か ― 2026-10-02 の実測】
@@ -232,7 +270,8 @@ class Checker(ast.NodeVisitor):
                     f"関数属性 `{holder}.{attr}` に追加し続けており、取り除く処理がありません",
                     f"関数 `{holder}` は解放されないので、`{holder}.{attr}` は"
                     "モジュール変数と同じように増え続けます。"
-                    "上限を設けるか明示的に解放してください"))
+                    f"`from collections import deque` して "
+                    f"`{holder}.{attr} = deque(maxlen=1000)` に置き換えるのが手軽です"))
         # BS004 ReDoS
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "re":
             if node.args and isinstance(node.args[0], ast.Constant) \
