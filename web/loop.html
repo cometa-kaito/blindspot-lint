@@ -185,8 +185,12 @@ const codeify = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
       elModel.appendChild(o);
     }
   } catch (e) {
-    elModel.innerHTML = "<option>読めません</option>";
+    // GitHub Pages などに静的に置かれた場合はここに来る（/api/ を返す相手がいない）
+    elModel.innerHTML = "<option>この画面だけでは動きません</option>";
     elGo.disabled = true;
+    setStatus("この画面は blindspot-loop が開くものです。"
+      + "手元で `pip install git+https://github.com/cometa-kaito/blindspot-lint` のあと "
+      + "`blindspot-loop` を実行してください。", false);
   }
 })();
 
