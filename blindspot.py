@@ -38,6 +38,45 @@ class Finding:
 # 誤差のない数値型。これらで組んだ式は除算があっても float ではない。
 EXACT_NUMERIC = {"Decimal", "Fraction"}
 
+# 必ず整数を返す組み込み。中身が float 由来でも結果は float ではない。
+# （len(new_list) を float 扱いして誤検出した。2026-10-02）
+INT_RETURNING = {"len", "int", "round", "ord", "id", "hash"}
+
+
+def _direct_floaty(value, floaty_names):
+    """この式は float を**直接**生むか（代入の追跡用）
+
+    算術演算の範囲だけを辿る。関数呼び出しや添字アクセスの中は見ない。
+    【なぜ範囲を絞るか ― 2026-10-02 の実測】
+    「式の中に floaty な名前があれば floaty」とすると伝播が広すぎた。
+    標準ライブラリで5件の誤検出が出た。
+
+        count = int(count * sel + .5)    ← count は floaty（正しい）
+        new_list = list[:count]          ← これを floaty にしてしまった
+        if len(list) != len(new_list):   ← そして鳴った（誤り）
+
+        probe2 = cls(y, m, d, hh, mm, ss, us, tz)   ← 引数経由で汚染
+        if probe2 == result:                         ← 鳴った（誤り）
+
+    datetime や list は、float から作っても float ではない。
+    """
+    if isinstance(value, ast.Constant):
+        return isinstance(value.value, float)
+    if isinstance(value, ast.Name):
+        return value.id in floaty_names
+    if isinstance(value, ast.BinOp):
+        if isinstance(value.op, ast.Div):
+            return True
+        return (_direct_floaty(value.left, floaty_names)
+                or _direct_floaty(value.right, floaty_names))
+    if isinstance(value, ast.UnaryOp):
+        return _direct_floaty(value.operand, floaty_names)
+    if isinstance(value, ast.Call):
+        name = (value.func.id if isinstance(value.func, ast.Name)
+                else value.func.attr if isinstance(value.func, ast.Attribute) else "")
+        return name == "float"
+    return False
+
 
 def _bounded_container(node):
     """上限が決まったコンテナか（deque(maxlen=N) など）
@@ -70,8 +109,19 @@ def _mutable_container(node):
     return False
 
 
-def _is_floaty(node):
+def _is_floaty(node, floaty_names=()):
     """float リテラルか、float を生みうる演算（除算・float() 呼び出し）を含むか
+
+    floaty_names には「float を生む式を代入された局所変数」の名前を渡す。
+    【なぜ必要か ― 2026-10-02 の実測】
+    除算を変数に出すだけで検出を逃れていた。
+
+        average = sum(scores) / len(scores)
+        return average == target          ← 式に除算がないので鳴らなかった
+
+    1行に書いた `sum(scores) / len(scores) == target` と同じ欠陥である。
+    qwen2.5:7b（非特化モデル）はこの書き方を好むため、
+    gen01 の5回すべてを取り逃していた。
 
     Decimal / Fraction で組んだ式は除外する。
     【なぜ ― 2026-10-02 の実測で見つけた自己矛盾】
@@ -81,6 +131,11 @@ def _is_floaty(node):
     qwen2.5-coder:3b はこれで3往復しても収束せず、
     4件中2件は元のコード（float の ==）に逆戻りした。
     """
+    if isinstance(node, ast.Call):
+        nm = (node.func.id if isinstance(node.func, ast.Name)
+              else node.func.attr if isinstance(node.func, ast.Attribute) else "")
+        if nm in INT_RETURNING:
+            return False          # len(...) は中身が何であれ int
     for n in ast.walk(node):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
            and n.func.id in EXACT_NUMERIC:
@@ -94,6 +149,8 @@ def _is_floaty(node):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
             return True
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "float":
+            return True
+        if isinstance(n, ast.Name) and n.id in floaty_names:
             return True
     return False
 
@@ -117,7 +174,8 @@ class Checker(ast.NodeVisitor):
         self._bool_stack = []     # いま走査中の and / or 式
         self.module_called = set()  # モジュール直下で呼ばれている関数名（＝初期化処理）
         self.module_funcs = set()   # モジュール直下で定義された関数名
-        self.attr_shrinking = set() # 縮む操作がある "関数名.属性名" 
+        self.attr_shrinking = set() # 縮む操作がある "関数名.属性名"
+        self.floaty_names = set()   # float を生む式を代入された局所変数
 
     # ---------- 収集 ----------
     def collect_module_state(self, tree):
@@ -193,11 +251,22 @@ class Checker(ast.NodeVisitor):
                             if isinstance(tg, ast.Name)}
         self.local_names -= {n.id for sub in ast.walk(node) if isinstance(sub, ast.Global)
                              for n in [ast.Name(id=x) for x in sub.names]}
+        # float を生む式を代入された局所変数を集める（除算の変数出しを追う）。
+        # 再代入で float でなくなる場合もあるが、保守的に「一度 floaty なら
+        # floaty」とする。偽陽性の代償は実測で確認する。
+        prev_floaty = self.floaty_names
+        self.floaty_names = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign) and len(sub.targets) == 1 \
+               and isinstance(sub.targets[0], ast.Name) \
+               and _direct_floaty(sub.value, self.floaty_names):
+                self.floaty_names.add(sub.targets[0].id)
         self.params.append(names)
         prev, self.cur_func = self.cur_func, node.name
         self.generic_visit(node)
         self.cur_func = prev
         self.local_names = prev_local
+        self.floaty_names = prev_floaty
         self.params.pop()
     visit_AsyncFunctionDef = visit_FunctionDef
 
@@ -333,7 +402,8 @@ class Checker(ast.NodeVisitor):
                 return isinstance(x, ast.Constant) or (
                     isinstance(x, ast.UnaryOp) and isinstance(x.operand, ast.Constant))
             if isinstance(op, (ast.Eq, ast.NotEq)) \
-               and (_is_floaty(node.left) or _is_floaty(right)) \
+               and (_is_floaty(node.left, self.floaty_names)
+                    or _is_floaty(right, self.floaty_names)) \
                and not (is_plain_const(node.left) or is_plain_const(right)):
                 self.findings.append(Finding(
                     "BS002", node.lineno, node.col_offset,
